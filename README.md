@@ -51,25 +51,33 @@ The installer:
 Quick test:
 
 ```bash
-~/.peon-boop/bin/boop rampup     # the default task-complete boop
-~/.peon-boop/bin/boop sweep      # audition all patterns
+~/.peon-boop/bin/boop           # chirp, the default boop
+~/.peon-boop/bin/boop skrrt     # audition a named pattern
 ```
 
 ## Patterns
 
-`boop` supports single pulses, a pattern sweep, and exponential ramps:
+`boop` is driven by **gap sequences**: a comma-separated list of millisecond gaps between pulses (one pulse per gap, plus a final pulse):
 
-| Command | Effect |
-|---|---|
-| `boop` | one firm click (pattern 6) |
-| `boop 3 5 250` | pattern 3, five pulses, 250 ms apart |
-| `boop sweep [gap]` | patterns 1–6 in sequence |
-| `boop rampup [p n s e]` | **default `6 12 20 200`** — 12 pulses, gaps grow 20→200 ms exponentially (rapid burst easing out) |
-| `boop rampdown [p n s e]` | **default `6 12 200 20`** — mirror (slow start accelerating) |
+```bash
+~/.peon-boop/bin/boop                 # default: chirp
+~/.peon-boop/bin/boop 60,120,40,80     # your own rhythm
+~/.peon-boop/bin/boop [60, 120, 40]    # brackets/spaces also fine
+```
 
-Valid actuation patterns on current firmware: **1–6, 15, 16** (0 and 7–9 are rejected by the trackpad — `sweep` maps them out). 1 is a light tick, 6 a firm press, 15/16 deep thunks.
+Built-in named patterns:
 
-Ramp gaps interpolate exponentially (geometric progression), so tempo change *feels* constant — like a heartbeat winding up or down. All four parameters are optional positional overrides.
+| Name | Gaps (ms) | Feel |
+|---|---|---|
+| `boop` | — | single firm click |
+| `chirp` *(default)* | `20,20,20,200,20,20,20,200,20,20,20` | zzt · zzt · zzt, crisp notification |
+| `skrrt` | `20,20,20,20,20,20,200,20,20,20,20,20,20` | double rattle, urgent |
+| `callme` | `60,120,40,80,40,120,60,300,60,120,60` | syncopated riff, question-answer |
+| `rimshot` | `50,80,50,120,150` | galloping ba-dum-tss |
+| `heart` | `200,700,200,700,200,700` | gentle heartbeat pairs |
+| `slowdown` | *(generated)* | 12 pulses, gaps 200→20 ms exponential (classic decelerando) |
+
+Click intensity defaults to 6 (firm); override with `BOOP_PATTERN` (valid ids: 1–6, 15, 16 — 1 is a light tick, 15/16 deep thunks).
 
 ## Configuration
 
@@ -86,19 +94,19 @@ Everything lives in `~/.config/peon-boop/config.json`:
     "input.required": true
   },
   "patterns": {
-    "session.start": "1 1",
-    "task.acknowledge": "2 1",
-    "task.complete": "rampup",
-    "task.error": "16 2 300",
-    "input.required": "3 2 400"
+    "session.start": "boop",
+    "task.acknowledge": "heart",
+    "task.complete": "chirp",
+    "task.error": "skrrt",
+    "input.required": "callme"
   }
 }
 ```
 
 - `categories` — which events boop at all (taxonomy shared with peon-ping)
-- `patterns` — the `boop` arguments fired for each event; any command from the table above works (`"rampup"` → the `6 12 20 200` default)
+- `patterns` — any named pattern or a raw gap list works, e.g. `"task.complete": "60,120,40"`
 
-The pi/oh-my-pi extension also honors `BOOP_ARGS` to bypass `boop.sh` and drive `bin/boop` directly.
+The pi/oh-my-pi extension also honors `BOOP_ARGS` to bypass `boop.sh` and drive `bin/boop` directly (names or gap lists).
 
 ## Agent support
 
@@ -145,7 +153,7 @@ bash uninstall.sh --purge  # also removes config
 
 **Does it work on Magic Trackpad 2/3?** Yes, when connected.
 
-**Why did nothing happen?** Run `~/.peon-boop/bin/boop sweep` — if no pattern fires, you have no Force Touch hardware. If patterns fire but hooks don't, check `categories` in config.json.
+**Why did nothing happen?** Run `~/.peon-boop/bin/boop boop` — if the single click doesn't fire, you have no Force Touch hardware. If it fires but hooks don't, check `categories` in config.json.
 
 **Is this safe?** The actuator is driven exactly as macOS itself drives it. The API is private and may break between macOS releases (exit code stays 0 so agents are never disturbed).
 

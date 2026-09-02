@@ -3,19 +3,26 @@
  * demand, with NO finger/gesture requirement, via the private
  * MultitouchSupport.framework (same technique as HapticKey).
  *
- * Evolved from the haptic-poc proof of concept.
- *
  * Usage:
- *   boop                          single firm click (pattern 6, 1x)
- *   boop <pattern> [count] [gap]  e.g. boop 3 5 250
- *   boop sweep [gap_ms]           fire patterns 1..6 in sequence
- *   boop rampup   [p] [n] [s] [e] DEFAULTS: 6 12 20 200
- *                                 12 pulses, gaps grow 20ms -> 200ms
- *                                 exponentially (rapid burst easing out)
- *   boop rampdown [p] [n] [s] [e] DEFAULTS: 6 12 200 20 (mirror)
+ *   boop                      default pattern: chirp
+ *   boop <name>               named pattern (see table below)
+ *   boop 60,120,40,80         explicit gap sequence, in ms
+ *   boop [60, 120, 40, 80]    brackets/spaces also accepted
  *
- * Valid patterns on 2015+ Force Touch hardware: 1-6, 15, 16
- * (0 and 7-9 are rejected by current firmware).
+ * A gap sequence fires one pulse per gap plus a final pulse:
+ *   "50,80,50" -> pulse-50ms-pulse-80ms-pulse-50ms-pulse
+ *
+ * Named patterns:
+ *   boop      single firm click
+ *   chirp     20,20,20,200,20,20,20,200,20,20,20     (default)
+ *   skrrt     20,20,20,20,20,20,200,20,20,20,20,20,20
+ *   callme    60,120,40,80,40,120,60,300,60,120,60
+ *   rimshot   50,80,50,120,150
+ *   heart     200,700,200,700,200,700
+ *   slowdown  exponential ramp, 12 pulses, 200ms -> 20ms (the old rampdown)
+ *
+ * Click intensity (actuation id) defaults to 6; override with BOOP_PATTERN
+ * (valid ids: 1-6, 15, 16).
  *
  * Set BOOP_QUIET=1 to suppress informational output (hook mode).
  *
@@ -96,6 +103,74 @@ static mt_actuator_ref (*resolve_MTActuatorCreate(void))(io_service_t, uint64_t)
     return NULL;
 }
 
+/* ------------------------------------------------------------------ */
+/* Pattern engine: gap sequences + a couple of generated specials      */
+
+struct named_pattern {
+    const char *name;
+    const char *gaps;   /* NULL => generated below */
+};
+
+static const struct named_pattern NAMED[] = {
+    { "boop",    NULL },
+    { "chirp",   "20,20,20,200,20,20,20,200,20,20,20" },
+    { "skrrt",   "20,20,20,20,20,20,200,20,20,20,20,20,20" },
+    { "callme",  "60,120,40,80,40,120,60,300,60,120,60" },
+    { "rimshot", "50,80,50,120,150" },
+    { "heart",   "200,700,200,700,200,700" },
+    { "slowdown", NULL },
+};
+
+/* fire one pulse per gap, plus a final pulse */
+static void play_sequence(mt_actuator_ref act, int id, const char *spec)
+{
+    char *copy = strdup(spec);
+    if (!copy) return;
+    int n = 1;
+    for (char *tok = strtok(copy, ","); tok; tok = strtok(NULL, ",")) {
+        int gap = atoi(tok);
+        int rc = MTActuatorActuate(act, id, 0, NULL, NULL);
+        msg("pulse %2d (gap %4dms) ... ret %d\n", n++, gap, rc);
+        usleep(gap * 1000);
+    }
+    int rc = MTActuatorActuate(act, id, 0, NULL, NULL);
+    msg("pulse %2d (final) ... ret %d\n", n, rc);
+    free(copy);
+}
+
+/* exponential ramp: 12 pulses, gaps 200ms -> 20ms (the classic slowdown) */
+static void play_slowdown(mt_actuator_ref act, int id)
+{
+    int count = 12, start = 200, end = 20;
+    for (int i = 0; i < count; i++) {
+        double t = count > 1 ? (double)i / (count - 1) : 1.0;
+        int gap = (int)(start * pow((double)end / start, t));
+        int rc = MTActuatorActuate(act, id, 0, NULL, NULL);
+        msg("pulse %2d/%d (gap %4dms) ... ret %d\n", i + 1, count, gap, rc);
+        if (i < count - 1) usleep(gap * 1000);
+    }
+}
+
+static void usage(void)
+{
+    fprintf(stderr,
+        "usage: boop [name | g1,g2,...,gN]\n"
+        "  names: boop chirp skrrt callme rimshot heart slowdown\n"
+        "  gaps:  milliseconds between pulses, e.g. boop 60,120,40\n");
+}
+
+/* strip '[' ']' and whitespace in place */
+static void clean_spec(char *s)
+{
+    char *w = s;
+    for (char *r = s; *r; r++)
+        if (*r != '[' && *r != ']' && *r != ' ')
+            *w++ = *r;
+    *w = '\0';
+}
+
+/* ------------------------------------------------------------------ */
+
 int main(int argc, char **argv)
 {
     /* dlopen instead of linking, so we need no copy of the private framework */
@@ -148,36 +223,30 @@ int main(int argc, char **argv)
 
     msg("[boop] device %llx actuator %p\n", (unsigned long long)dev_id, act);
 
-    if (argc > 1 && strcmp(argv[1], "sweep") == 0) {
-        int gap_ms = argc > 2 ? atoi(argv[2]) : 500;
-        for (int id = 1; id <= 6; id++) {
-            int rc = MTActuatorActuate(act, id, 0, NULL, NULL);
-            msg("pattern %d ... ret %d\n", id, rc);
-            usleep(gap_ms * 1000);
-        }
-    } else if (argc > 1 && (strcmp(argv[1], "rampup") == 0 ||
-                            strcmp(argv[1], "rampdown") == 0)) {
-        bool up       = argv[1][4] == 'u';               /* ramp[u]p */
-        int id        = argc > 2 ? atoi(argv[2]) : 6;
-        int count     = argc > 3 ? atoi(argv[3]) : 12;
-        int start_ms  = argc > 4 ? atoi(argv[4]) : (up ? 20  : 200);
-        int end_ms    = argc > 5 ? atoi(argv[5]) : (up ? 200 : 20);
-        for (int i = 0; i < count; i++) {
-            int rc = MTActuatorActuate(act, id, 0, NULL, NULL);
-            double t = count > 1 ? (double)i / (count - 1) : 1.0;
-            int gap = (int)(start_ms * pow((double)end_ms / start_ms, t));
-            msg("pulse %2d/%d (gap %4dms) ... ret %d\n", i + 1, count, gap, rc);
-            if (i < count - 1) usleep(gap * 1000);
-        }
+    int id = 6;
+    if (getenv("BOOP_PATTERN")) {
+        int v = atoi(getenv("BOOP_PATTERN"));
+        if (v >= 1) id = v;
+    }
+
+    /* resolve the pattern argument (default: chirp) */
+    char spec[512];
+    snprintf(spec, sizeof spec, "%s", argc > 1 ? argv[1] : "chirp");
+    clean_spec(spec);
+
+    if (strcmp(spec, "boop") == 0) {
+        int rc = MTActuatorActuate(act, id, 0, NULL, NULL);
+        msg("pulse (single) ... ret %d\n", rc);
+    } else if (strcmp(spec, "slowdown") == 0) {
+        play_slowdown(act, id);
+    } else if (strchr(spec, ',')) {
+        play_sequence(act, id, spec);
     } else {
-        int id     = argc > 1 ? atoi(argv[1]) : 6;       /* default: one firm click */
-        int count  = argc > 2 ? atoi(argv[2]) : 1;
-        int gap_ms = argc > 3 ? atoi(argv[3]) : 250;
-        for (int i = 0; i < count; i++) {
-            int rc = MTActuatorActuate(act, id, 0, NULL, NULL);
-            msg("pattern %d ... ret %d\n", id, rc);
-            usleep(gap_ms * 1000);
-        }
+        const struct named_pattern *np = NULL;
+        for (size_t i = 0; i < sizeof NAMED / sizeof NAMED[0]; i++)
+            if (strcmp(spec, NAMED[i].name) == 0) { np = &NAMED[i]; break; }
+        if (!np) { usage(); die("unknown pattern"); }
+        play_sequence(act, id, np->gaps);
     }
 
     MTActuatorClose(act);

@@ -93,4 +93,4 @@ done
 echo
 info "${BOLD}peon-boop installed.${RESET} Patterns live in $CONFIG_DIR/config.json"
 echo "  Manual adapters: gemini, grok, cursor — see README.md"
-echo "  Test: $INSTALL_DIR/bin/boop rampup"
+echo "  Test: $INSTALL_DIR/bin/boop"        # default pattern: chirp

@@ -3,7 +3,7 @@
  * Buzzes the trackpad when the agent is ready for input.
  *
  * Routes through boop.sh so pattern config stays centralized in
- * config.json (default task.complete pattern: `rampup` = 6 12 20 200).
+ * config.json (default task.complete pattern: `chirp`).
  * Set BOOP_ARGS to bypass boop.sh and drive bin/boop directly.
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";

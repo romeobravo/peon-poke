@@ -8,10 +8,10 @@
     "input.required": true
   },
   "patterns": {
-    "session.start": "1 1",
-    "task.acknowledge": "2 1",
-    "task.complete": "rampup",
-    "task.error": "16 2 300",
-    "input.required": "3 2 400"
+    "session.start": "boop",
+    "task.acknowledge": "heart",
+    "task.complete": "chirp",
+    "task.error": "skrrt",
+    "input.required": "callme"
   }
 }
