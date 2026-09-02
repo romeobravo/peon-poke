@@ -18,8 +18,8 @@
  *   skrrt     20,20,20,20,20,20,200,20,20,20,20,20,20
  *   callme    60,120,40,80,40,120,60,300,60,120,60
  *   rimshot   50,80,50,120,150
- *   heart     200,700,200,700,200,700
- *   slowdown  exponential ramp, 12 pulses, 200ms -> 20ms (the old rampdown)
+ *   heartbeat 200,700,200,700,200,700
+ *   slowdown  200,162,132,107,87,70,57,46,37,30,25,20 (precomputed exp ramp)
  *
  * Click intensity (actuation id) defaults to 6; override with BOOP_PATTERN
  * (valid ids: 1-6, 15, 16).
@@ -38,7 +38,6 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <string.h>
-#include <math.h>
 #include <stdarg.h>
 #include <unistd.h>
 #include <IOKit/IOKitLib.h>
@@ -104,21 +103,21 @@ static mt_actuator_ref (*resolve_MTActuatorCreate(void))(io_service_t, uint64_t)
 }
 
 /* ------------------------------------------------------------------ */
-/* Pattern engine: gap sequences + a couple of generated specials      */
+/* Pattern engine: everything is a literal gap sequence                */
 
 struct named_pattern {
     const char *name;
-    const char *gaps;   /* NULL => generated below */
+    const char *gaps;   /* NULL => single pulse */
 };
 
 static const struct named_pattern NAMED[] = {
-    { "boop",    NULL },
-    { "chirp",   "20,20,20,200,20,20,20,200,20,20,20" },
-    { "skrrt",   "20,20,20,20,20,20,200,20,20,20,20,20,20" },
-    { "callme",  "60,120,40,80,40,120,60,300,60,120,60" },
-    { "rimshot", "50,80,50,120,150" },
-    { "heart",   "200,700,200,700,200,700" },
-    { "slowdown", NULL },
+    { "boop",      NULL },
+    { "chirp",     "20,20,20,200,20,20,20,200,20,20,20" },
+    { "skrrt",     "20,20,20,20,20,20,200,20,20,20,20,20,20" },
+    { "callme",    "60,120,40,80,40,120,60,300,60,120,60" },
+    { "rimshot",   "50,80,50,120,150" },
+    { "heartbeat", "200,700,200,700,200,700" },
+    { "slowdown",  "200,162,132,107,87,70,57,46,37,30,25,20" },
 };
 
 /* fire one pulse per gap, plus a final pulse */
@@ -138,24 +137,11 @@ static void play_sequence(mt_actuator_ref act, int id, const char *spec)
     free(copy);
 }
 
-/* exponential ramp: 12 pulses, gaps 200ms -> 20ms (the classic slowdown) */
-static void play_slowdown(mt_actuator_ref act, int id)
-{
-    int count = 12, start = 200, end = 20;
-    for (int i = 0; i < count; i++) {
-        double t = count > 1 ? (double)i / (count - 1) : 1.0;
-        int gap = (int)(start * pow((double)end / start, t));
-        int rc = MTActuatorActuate(act, id, 0, NULL, NULL);
-        msg("pulse %2d/%d (gap %4dms) ... ret %d\n", i + 1, count, gap, rc);
-        if (i < count - 1) usleep(gap * 1000);
-    }
-}
-
 static void usage(void)
 {
     fprintf(stderr,
         "usage: boop [name | g1,g2,...,gN]\n"
-        "  names: boop chirp skrrt callme rimshot heart slowdown\n"
+        "  names: boop chirp skrrt callme rimshot heartbeat slowdown\n"
         "  gaps:  milliseconds between pulses, e.g. boop 60,120,40\n");
 }
 
@@ -237,8 +223,6 @@ int main(int argc, char **argv)
     if (strcmp(spec, "boop") == 0) {
         int rc = MTActuatorActuate(act, id, 0, NULL, NULL);
         msg("pulse (single) ... ret %d\n", rc);
-    } else if (strcmp(spec, "slowdown") == 0) {
-        play_slowdown(act, id);
     } else if (strchr(spec, ',')) {
         play_sequence(act, id, spec);
     } else {

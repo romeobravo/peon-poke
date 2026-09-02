@@ -74,8 +74,8 @@ Built-in named patterns:
 | `skrrt` | `20,20,20,20,20,20,200,20,20,20,20,20,20` | double rattle, urgent |
 | `callme` | `60,120,40,80,40,120,60,300,60,120,60` | syncopated riff, question-answer |
 | `rimshot` | `50,80,50,120,150` | galloping ba-dum-tss |
-| `heart` | `200,700,200,700,200,700` | gentle heartbeat pairs |
-| `slowdown` | *(generated)* | 12 pulses, gaps 200→20 ms exponential (classic decelerando) |
+| `heartbeat` | `200,700,200,700,200,700` | gentle heartbeat pairs |
+| `slowdown` | `200,162,132,107,87,70,57,46,37,30,25,20` | precomputed exponential ramp, classic decelerando |
 
 Click intensity defaults to 6 (firm); override with `BOOP_PATTERN` (valid ids: 1–6, 15, 16 — 1 is a light tick, 15/16 deep thunks).
 
@@ -95,7 +95,7 @@ Everything lives in `~/.config/peon-boop/config.json`:
   },
   "patterns": {
     "session.start": "boop",
-    "task.acknowledge": "heart",
+    "task.acknowledge": "heartbeat",
     "task.complete": "chirp",
     "task.error": "skrrt",
     "input.required": "callme"

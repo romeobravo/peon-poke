@@ -9,7 +9,7 @@
   },
   "patterns": {
     "session.start": "boop",
-    "task.acknowledge": "heart",
+    "task.acknowledge": "heartbeat",
     "task.complete": "chirp",
     "task.error": "skrrt",
     "input.required": "callme"
