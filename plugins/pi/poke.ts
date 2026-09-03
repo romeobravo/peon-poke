@@ -1,5 +1,6 @@
 /**
  * peon-poke — pi (and oh-my-pi) extension
+ * Managed by peon-poke-setup: reinstalling peon-poke refreshes this file.
  * Buzzes the trackpad when the agent is ready for input.
  *
  * Routes through poke.sh so pattern config stays centralized in
@@ -19,6 +20,11 @@ function fire(category: string) {
     const child = ARGS.length
       ? spawn(join(DIR, "bin/poke"), ARGS, { detached: true, stdio: "ignore" })
       : spawn("bash", [join(DIR, "poke.sh"), category], { detached: true, stdio: "ignore" });
+    // spawn() failures (ENOENT, EACCES) are delivered as an ASYNC "error"
+    // event — the try/catch above never sees them, and without a listener
+    // they would crash the host agent. Swallow: a missed poke must never
+    // take the session down.
+    child.on("error", () => {});
     child.unref();
   } catch {
     // never let a failed poke break the session

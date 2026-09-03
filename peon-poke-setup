@@ -25,6 +25,10 @@ cp "$SRC_DIR/bin/poke"           "$INSTALL_DIR/bin/poke"
 cp "$SRC_DIR/poke.sh"            "$INSTALL_DIR/poke.sh"
 cp "$SRC_DIR/adapters/"*.sh      "$INSTALL_DIR/adapters/"
 cp "$SRC_DIR/plugins/pi/poke.ts" "$INSTALL_DIR/plugins/pi/poke.ts"
+if [ -f "$SRC_DIR/uninstall.sh" ]; then
+  cp "$SRC_DIR/uninstall.sh" "$INSTALL_DIR/uninstall.sh"
+  chmod +x "$INSTALL_DIR/uninstall.sh"
+fi
 chmod +x "$INSTALL_DIR/bin/poke" "$INSTALL_DIR/poke.sh" "$INSTALL_DIR/adapters/"*.sh
 
 # --- config (never overwrite an existing one) ---
@@ -63,8 +67,11 @@ def add(event, category):
 add("Stop", "task.complete")
 add("Notification", "input.required")
 add("SessionStart", "session.start")
-if os.path.exists(path):
-    shutil.copy2(path, path + ".peon-poke-bak")  # never modify without a backup
+# Stable original backup: never overwrite an existing .peon-poke-bak —
+# re-running setup must not replace the user's true rollback point with
+# an already-modified file. Delete the .bak to take a fresh one.
+if os.path.exists(path) and not os.path.exists(path + ".peon-poke-bak"):
+    shutil.copy2(path, path + ".peon-poke-bak")
 with open(path, "w") as f:
     json.dump(cfg, f, indent=2)
 PY
@@ -80,12 +87,138 @@ fi
 # --- register Codex notify ---
 if [ -d "$HOME/.codex" ]; then
   CODEX_TOML="$HOME/.codex/config.toml"
-  if ! grep -q "peon-poke" "$CODEX_TOML" 2>/dev/null; then
-    printf '\n# peon-poke (managed — remove to uninstall)\nnotify = ["bash", "%s/adapters/codex.sh"]\n' \
-      "$INSTALL_DIR" >> "$CODEX_TOML"
-    info "Codex notify registered in ~/.codex/config.toml"
+  if command -v python3 >/dev/null 2>&1; then
+    # Prefer a python with tomllib (3.11+) so edits are parse-validated;
+    # any python3 can do the structural edit itself.
+    CODEX_PY=python3
+    for p in python3.13 python3.12 python3.11; do
+      if command -v "$p" >/dev/null 2>&1 && "$p" -c 'import tomllib' >/dev/null 2>&1; then
+        CODEX_PY="$p"; break
+      fi
+    done
+    CODEX_STATUS=0
+    "$CODEX_PY" - "$CODEX_TOML" "$INSTALL_DIR" <<'PY' || CODEX_STATUS=$?
+import json, os, re, shutil, sys, tempfile
+
+path, install_dir = sys.argv[1], sys.argv[2]
+adapter = os.path.join(install_dir, "adapters", "codex.sh")
+MARKER = "# peon-poke (managed — remove to uninstall)"
+escaped_adapter = json.dumps(adapter)[1:-1]  # JSON escaping is TOML-compatible
+
+try:
+    with open(path) as f:
+        src = f.read()
+except FileNotFoundError:
+    src = ""
+except OSError as e:
+    sys.stderr.write(f"peon-poke: cannot read {path} ({e}) — file left untouched\n")
+    sys.exit(1)
+lines = src.splitlines()
+
+table_re = re.compile(r"^\s*\[")
+notify_re = re.compile(r"^\s*notify\s*=")
+
+def is_our_notify(l):
+    return bool(notify_re.match(l)) and escaped_adapter in l
+
+def first_table_index(ls):
+    return next((i for i, l in enumerate(ls) if table_re.match(l)), None)
+
+try:
+    import tomllib
+except ImportError:
+    tomllib = None  # Python < 3.11: structural edit only, no parse validation
+def parse_ok(text):
+    if tomllib is None or not text.strip():
+        return True
+    try:
+        tomllib.loads(text)
+        return True
+    except Exception:
+        return False
+
+# Strip every managed line we ever wrote (marker+notify pair, or a bare
+# managed notify), plus one adjacent separator blank per seam. This heals
+# registrations made by older setups: notify appended after a [table]
+# header (silently scoped to that table) or duplicated after a user's own
+# top-level notify (invalid TOML).
+def strip_managed(ls):
+    out, i, seams = [], 0, []
+    while i < len(ls):
+        if ls[i].strip() == MARKER and i + 1 < len(ls) and is_our_notify(ls[i + 1]):
+            seams.append(len(out)); i += 2; continue
+        if is_our_notify(ls[i]):
+            seams.append(len(out)); i += 1; continue
+        out.append(ls[i]); i += 1
+    for s in sorted(set(seams), reverse=True):
+        if 0 < s <= len(out) and out[s - 1].strip() == "":
+            del out[s - 1]
+        elif s < len(out) and out[s].strip() == "":
+            del out[s]
+    return out
+
+base = strip_managed(lines)
+ft = first_table_index(base)
+
+# A user's own top-level notifier wins: never add a second `notify` key
+# (invalid TOML). Our stray lines are still removed to heal old damage.
+user_notify = any(notify_re.match(l) for l in base[:ft if ft is not None else len(base)])
+
+if src and not parse_ok(src):
+    if base != lines and parse_ok("\n".join(base) + "\n"):
+        sys.stderr.write("peon-poke: healing invalid ~/.codex/config.toml caused by an older peon-poke setup\n")
+    else:
+        sys.stderr.write(f"peon-poke: {path} is not valid TOML — file left untouched, fix it and re-run peon-poke-setup\n")
+        sys.exit(3)
+
+block = [MARKER, f'notify = ["bash", "{escaped_adapter}"]']
+if user_notify:
+    new = "\n".join(base)
+    if not new.endswith("\n"):
+        new += "\n"
+    status = 2
+else:
+    ft = first_table_index(base)
+    if ft is None:
+        out = list(base)
+        if out and out[-1].strip() != "":
+            out.append("")
+        out += block
+    else:
+        out = list(base[:ft])
+        while out and out[-1].strip() == "":
+            out.pop()
+        out += [""] + block + [""] + list(base[ft:])
+    new = "\n".join(out) + "\n"
+    status = 0
+
+if new == src:
+    sys.exit(status)  # already in the desired state — byte-identical, no churn
+
+if not parse_ok(new):
+    sys.stderr.write(f"peon-poke: refusing to write {path}: edit would break TOML\n")
+    sys.exit(4)
+
+if src:
+    # Stable original backup: never overwrite an existing .peon-poke-bak —
+    # re-runs must keep the user's true rollback point, not an
+    # already-modified file. Delete the .bak to take a fresh one.
+    if not os.path.exists(path + ".peon-poke-bak"):
+        shutil.copy2(path, path + ".peon-poke-bak")
+fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path) or ".", prefix=".config.toml.")
+with os.fdopen(fd, "w") as f:
+    f.write(new)
+os.replace(tmp, path)  # atomic replace
+sys.exit(status)
+PY
+    case "$CODEX_STATUS" in
+      0) info "Codex notify registered in ~/.codex/config.toml" ;;
+      2) warn "Codex notify NOT registered — existing top-level notify preserved (our stray entries removed if any)" ;;
+      3) warn "Codex notify NOT registered — ~/.codex/config.toml is not valid TOML" ;;
+      *) warn "Codex notify NOT registered — see stderr above" ;;
+    esac
   else
-    info "Codex notify already registered"
+    warn "Codex notify NOT registered — python3 required"
   fi
 else
   info "Codex not detected (~/.codex) — skipping"
@@ -94,14 +227,59 @@ fi
 # --- install pi / oh-my-pi extension ---
 for ext_dir in "$HOME/.pi/agent/extensions" "$HOME/.omp/agent/extensions"; do
   if [ -d "$ext_dir" ]; then
-    cp "$INSTALL_DIR/plugins/pi/poke.ts" "$ext_dir/peon-poke.ts"
-    info "Extension installed: $ext_dir/peon-poke.ts"
+    DEST="$ext_dir/peon-poke.ts"
+    if [ -e "$DEST" ]; then
+      # Ownership: only refresh files we recognize as ours (setup marker or
+      # the pre-marker header). A foreign/unknown file named peon-poke.ts is
+      # never clobbered.
+      if [ ! -f "$DEST" ]; then
+        warn "$DEST exists but is not a regular file — skipping"
+        continue
+      fi
+      if ! head -n 8 "$DEST" | grep -q 'peon-poke-setup\|pi (and oh-my-pi) extension'; then
+        warn "$DEST exists but is not recognized as ours — left untouched"
+        continue
+      fi
+      # Recognized as ours but modified (user tweaks)? Keep one stable copy
+      # of their version before the first refresh overwrites it.
+      if [ ! -f "$DEST.peon-poke-bak" ] && ! cmp -s "$DEST" "$INSTALL_DIR/plugins/pi/poke.ts"; then
+        cp "$DEST" "$DEST.peon-poke-bak"
+        info "Existing extension saved to $DEST.peon-poke-bak (modified copy preserved)"
+      fi
+    fi
+    cp "$INSTALL_DIR/plugins/pi/poke.ts" "$DEST"
+    info "Extension installed: $DEST"
   else
     info "$(basename "$(dirname "$(dirname "$ext_dir")")") not detected ($ext_dir) — skipping"
   fi
 done
 
+# --- install the peon-poke-uninstall command ---
+if [ -f "$INSTALL_DIR/uninstall.sh" ]; then
+  cat > "$INSTALL_DIR/bin/peon-poke-uninstall" <<'LAUNCHER'
+#!/bin/bash
+# peon-poke uninstaller launcher — self-locates the install it lives in.
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+exec env POKE_DIR="$DIR" bash "$DIR/uninstall.sh" "$@"
+LAUNCHER
+  chmod +x "$INSTALL_DIR/bin/peon-poke-uninstall"
+  # Expose on PATH — but only via a dir that is already on PATH and
+  # writable; we never create PATH entries or touch shell profiles.
+  for d in "$HOME/.local/bin" "$HOME/bin" /usr/local/bin; do
+    case ":$PATH:" in *":$d:"*) ;; *) continue ;; esac
+    [ -d "$d" ] && [ -w "$d" ] || continue
+    if [ -e "$d/peon-poke-uninstall" ] && [ ! -L "$d/peon-poke-uninstall" ]; then
+      warn "$d/peon-poke-uninstall exists and is not ours — not replacing it"
+      continue
+    fi
+    ln -sfn "$INSTALL_DIR/bin/peon-poke-uninstall" "$d/peon-poke-uninstall"
+    info "Uninstall command installed: $d/peon-poke-uninstall"
+    break
+  done
+fi
+
 echo
 info "${BOLD}peon-poke installed.${RESET} Patterns live in $CONFIG_DIR/config.json"
+echo "  Uninstall: peon-poke-uninstall   (or: bash $INSTALL_DIR/uninstall.sh)"
 echo "  Manual adapters: gemini, grok, cursor — see README.md"
 echo "  Test: $INSTALL_DIR/bin/poke"        # default pattern: fortune

@@ -31,9 +31,19 @@ Structurally a haptic sibling of [peon-ping](https://github.com/PeonPing/peon-pi
 
 ## Requirements
 
-- macOS with a **Force Touch trackpad** (2015+ MacBook, Magic Trackpad 2/3)
-- `clang` (build), `python3` (config parsing)
-- arm64 notes: the unexported-symbol resolver decodes arm64 `BL` instructions (x86_64 Macs use the classic path)
+- macOS 12+ (Monterey) with a **Force Touch trackpad** (2015+ MacBook, Magic Trackpad 2/3)
+- `python3` (hook registration and adapters)
+- `clang` only for source builds (Homebrew and the installer ship a precompiled binary)
+
+### Compatibility matrix
+
+| | arm64 (Apple Silicon) | x86_64 (Intel) |
+|---|---|---|
+| Precompiled binary (installer, Homebrew bottles n/a — builds from source) | ✅ tested on hardware | ✅ ships in the same universal binary; Force Touch path is the same private API, but not hardware-tested by us |
+| Source build (`make`) | ✅ | ✅ cross-compiles cleanly |
+| Minimum macOS at load time | 12.0 (`-mmacosx-version-min=12.0` in the Makefile) | 12.0 |
+
+The unexported-symbol resolver decodes arm64 `BL` instructions; x86_64 Macs use the classic symbol path. If the actuator quirks differ on an OS/binary combination you run, file an issue — the valid actuation-ID set is empirical (see the source header).
 
 ## Install
 
@@ -44,13 +54,13 @@ brew install romeobravo/tap/peon-poke
 peon-poke-setup     # registers hooks for detected agents
 ```
 
-### Option 2: Installer script (precompiled, Apple Silicon)
+### Option 2: Installer script (precompiled, universal)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/romeobravo/peon-poke/main/install-remote.sh | bash
 ```
 
-Downloads the precompiled arm64 binary plus runtime files, verifies everything against the release's `SHA256SUMS` manifest, and runs setup automatically.
+Downloads the precompiled universal binary (arm64 + x86_64, macOS 12+) plus runtime files, verifies everything against the release's `SHA256SUMS` manifest, and runs setup automatically.
 
 ### Option 3: Inspect & install from source
 
@@ -61,11 +71,11 @@ less install.sh src/poke.c   # what you see is what runs
 bash install.sh
 ```
 
-Builds `bin/poke` from source (needs `clang`) and runs setup. Intel Macs: use this option — the prebuilt binary is arm64-only.
+Builds `bin/poke` from source (needs `clang`) and runs setup.
 
 Every path ends in the same setup step:
 
-1. obtains `bin/poke` — Homebrew and the installer use the precompiled arm64 binary; source installs build with `clang`
+1. obtains `bin/poke` — Homebrew and the installer use the precompiled universal binary; source installs build with `clang`
 2. installs everything to `~/.peon-poke/`
 3. writes `~/.config/peon-poke/config.json` (kept on reinstall)
 4. registers hooks for every agent it detects: Claude Code, Codex, pi, oh-my-pi
@@ -131,7 +141,7 @@ Everything lives in `~/.config/peon-poke/config.json`:
 
 - `strength` — click intensity for all pokes: **1–6** (1 = light tick, 6 = firm press). Default 6; values outside 1–6 fall back to 6
 - `categories` — which events poke at all (taxonomy shared with peon-ping)
-- `patterns` — any named pattern or a raw gap list works, e.g. `"task.complete": "60,120,40"`
+- `patterns` — any named pattern or a raw gap list works, e.g. `"task.complete": "60,120,40"`; brackets and spaces are fine too (`"[60, 120, 40]"` — passed to `poke` as a single pattern)
 - `custom` — define your own named patterns, or override built-ins: `"custom": {"doorbell": "200,700,200,700", "chirp": "40,40,400"}` makes `doorbell` available anywhere a name is used, and redefines `chirp`. Applies wherever patterns resolve (hooks + `poke.sh`); `bin/poke <name>` from a shell uses the built-ins directly
 
 Test any pattern without waiting for an agent: `bash ~/.peon-poke/poke.sh doorbell` (or a raw list: `bash ~/.peon-poke/poke.sh 60,120,40`)
@@ -151,6 +161,8 @@ The pi/oh-my-pi extension also honors `POKE_ARGS` to bypass `poke.sh` and drive 
 | Cursor | `~/.cursor/hooks.json` | manual: `{ "hooks": [{ "event": "stop", "command": "bash ~/.peon-poke/adapters/cursor.sh stop" }] }` (Cursor has no notification/permission hook — see `adapters/cursor.sh`) |
 
 Adapters are thin: read the agent's event (argv or stdin JSON), map to a category, exec `poke.sh <category>`. Porting more of peon-ping's adapters (amp, kimi, qwen, kiro, windsurf, …) follows the same two-dozen-line pattern — PRs welcome.
+
+**Codex with an existing `notify`:** Codex allows exactly one `notify` program. If your `~/.codex/config.toml` already has one (e.g. the Codex desktop app registers its computer-use client), setup preserves it, removes any stray peon-poke entries older setups left behind, and skips registration with a warning. To get pokes as well, wrap both programs in a tiny script of your own and point `notify` at it — Codex passes the same JSON argument through to whatever you invoke.
 
 ## How it works
 
@@ -173,9 +185,17 @@ agent event ──► adapter / hook ──► poke.sh <category>
 ## Uninstall
 
 ```bash
-bash uninstall.sh          # removes hooks + ~/.peon-poke, keeps config
-bash uninstall.sh --purge  # also removes config
+peon-poke-uninstall          # removes hooks + ~/.peon-poke, keeps config
+peon-poke-uninstall --purge  # also removes config
 ```
+
+`peon-poke-setup` installs this command (symlinked into a directory already on your `PATH`, e.g. `~/.local/bin` — it never creates `PATH` entries or edits shell profiles). If no suitable directory exists, use the fallback:
+
+```bash
+bash ~/.peon-poke/uninstall.sh [--purge]
+```
+
+The uninstaller only removes the exact `notify` block it manages in `~/.codex/config.toml` and its own entries in `~/.claude/settings.json` (both backed up first, and re-runs never overwrite your original `*.peon-poke-bak` rollback point) — your own notes and settings survive byte-for-byte. Extension files it doesn't recognize as peon-poke's are left in place. Deletion targets are canonicalized and checked against a refuse-list (`/`, your home, anything not recognizable as a peon-poke install); deliberately custom install locations can be forced with `POKE_UNSAFE_RM=1`.
 
 ## FAQ
 

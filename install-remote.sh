@@ -45,5 +45,5 @@ SUMS_OUT="$(cd "$TMP" && shasum -a 256 -c SHA256SUMS 2>&1)" || {
 }
 echo "> Integrity verified: $(printf '%s\n' "$SUMS_OUT" | grep -c ': OK$') files (sha256)"
 
-chmod +x "$TMP/dist/poke-darwin-arm64" "$TMP/peon-poke-setup"
+chmod +x "$TMP/dist/poke-darwin-universal" "$TMP/peon-poke-setup" "$TMP/uninstall.sh"
 bash "$TMP/install.sh"

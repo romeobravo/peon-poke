@@ -63,5 +63,7 @@ STRENGTH="$(printf '%s\n' "$PATTERN_STRENGTH" | sed -n 2p)"
 [ -n "$PATTERN" ] || exit 0
 
 # Detached + quiet: hooks must never block or spam the host agent.
-# shellcheck disable=SC2086
-POKE_QUIET=1 POKE_PATTERN="$STRENGTH" "$POKE_BIN" $PATTERN >/dev/null 2>&1 &
+# "$PATTERN" stays quoted — patterns are single spec strings ("[60, 120, 40]",
+# "boop"); unquoted expansion word-splits spaced lists and glob-expands
+# stray "*", and bin/poke only reads argv[1] so the rest is silently dropped.
+POKE_QUIET=1 POKE_PATTERN="$STRENGTH" "$POKE_BIN" "$PATTERN" >/dev/null 2>&1 &

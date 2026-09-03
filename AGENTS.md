@@ -27,7 +27,7 @@ These bit us once; don't relearn them:
 - Gap values are clamped to 0–10000 ms (`GAP_MAX_MS` in `play_sequence`): `usleep` takes an unsigned count, so an unclamped negative gap parks the process for ~71 minutes.
 - `poke.sh` fires detached, quiet, and never blocks the calling agent.
 - `peon-poke-setup` never clobbers `~/.claude/settings.json`: on parse failure it skips Claude registration and leaves the file byte-identical; otherwise it writes `settings.json.peon-poke-bak` before modifying. `config.json` is only created if missing, never overwritten.
-- `install-remote.sh` verifies every fetched file against `SHA256SUMS` **before executing anything**, and hard-fails if the manifest is missing at the install base.
+- `install-remote.sh` verifies every fetched file against `SHA256SUMS` **before executing anything**, and hard-fails if the manifest is missing at the install base. The manifest also drives the fetch list — it must include `uninstall.sh` (setup copies it into `~/.peon-poke/` and installs the `peon-poke-uninstall` command) and the universal dist binary.
 
 ## Build & smoke test
 
@@ -38,17 +38,31 @@ make                 # clang -O2 -Wall — must stay warning-free
 ./bin/poke nosuch    # usage on stderr, exit 0
 ```
 
+## Test suite
+
+`tests/run-all.sh` covers the Codex adapter dispatch matrix, the TOML-aware
+setup fixtures (empty / table-ending / existing-notify / malformed /
+quoted-path configs), and the uninstaller's destructive-safety guards —
+all against isolated fake HOMEs. Run it before any release and after any
+change to `adapters/`, `peon-poke-setup`, or `uninstall.sh`:
+
+```
+bash tests/run-all.sh
+```
+
 ## dist binary
 
-`dist/poke-darwin-arm64` is committed to git. Homebrew builds from source, but the curl installer ships this binary — **rebuild and refresh it after every `src/poke.c` change**:
+`dist/poke-darwin-universal` (arm64 + x86_64, `-mmacosx-version-min=12.0`) is committed to git. Homebrew builds from source, but the curl installer ships this binary — **rebuild and refresh it after every `src/poke.c` change**:
 
 ```
-make && cp bin/poke dist/poke-darwin-arm64
+make dist
 ```
+
+Never ship a binary built without the deployment target — it silently inherits the build machine's macOS (that's how we once shipped a macOS-26-only binary while claiming 12+ support).
 
 ## SHA256SUMS
 
-`install-remote.sh` fetches exactly the files listed in `SHA256SUMS` and verifies each one. Whenever you touch `install.sh`, `peon-poke-setup`, `poke.sh`, `config.json`, `dist/poke-darwin-arm64`, `plugins/pi/*.ts`, or `adapters/*.sh`, regenerate and commit the manifest:
+`install-remote.sh` fetches exactly the files listed in `SHA256SUMS` and verifies each one. Whenever you touch `install.sh`, `peon-poke-setup`, `uninstall.sh`, `poke.sh`, `config.json`, `dist/poke-darwin-universal`, `plugins/pi/*.ts`, or `adapters/*.sh`, regenerate and commit the manifest:
 
 ```
 scripts/sha256sums.sh

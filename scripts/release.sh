@@ -3,7 +3,7 @@
 #
 # Usage: scripts/release.sh <X.Y.Z> ["commit message"]
 #
-# Flow: preflight -> rebuild -> refresh dist/poke-darwin-arm64 ->
+# Flow: preflight -> rebuild -> refresh dist/poke-darwin-universal ->
 # regenerate SHA256SUMS -> bump VERSION -> commit everything ->
 # tag vX.Y.Z -> push main + tag -> gh release create -> brew-bump the tap.
 #
@@ -35,8 +35,8 @@ command -v clang >/dev/null 2>&1 || die "clang not found"
 echo "==> building"
 make clean >/dev/null
 make >/dev/null
-cp bin/poke dist/poke-darwin-arm64
-echo "==> dist/poke-darwin-arm64 refreshed"
+make dist >/dev/null
+echo "==> dist/poke-darwin-universal refreshed (arm64 + x86_64, min macOS $(make -s print-min))"
 
 bash scripts/sha256sums.sh >/dev/null
 echo "==> SHA256SUMS regenerated"
