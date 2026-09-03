@@ -16,6 +16,7 @@ shasum -a 256 \
   config.json \
   dist/poke-darwin-universal \
   plugins/pi/*.ts \
+  plugins/opencode/*.ts \
   adapters/*.sh \
   > SHA256SUMS
 

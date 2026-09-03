@@ -20,11 +20,14 @@ warn() { printf "%s!%s %s\n" "$YELLOW" "$RESET" "$*"; }
 [ -x "$SRC_DIR/bin/poke" ] || { warn "$SRC_DIR/bin/poke not found — run install.sh or brew first"; exit 1; }
 
 info "Installing to $INSTALL_DIR"
-mkdir -p "$INSTALL_DIR/bin" "$INSTALL_DIR/adapters" "$INSTALL_DIR/plugins/pi"
+mkdir -p "$INSTALL_DIR/bin" "$INSTALL_DIR/adapters" "$INSTALL_DIR/plugins/pi" "$INSTALL_DIR/plugins/opencode"
 cp "$SRC_DIR/bin/poke"           "$INSTALL_DIR/bin/poke"
 cp "$SRC_DIR/poke.sh"            "$INSTALL_DIR/poke.sh"
 cp "$SRC_DIR/adapters/"*.sh      "$INSTALL_DIR/adapters/"
 cp "$SRC_DIR/plugins/pi/poke.ts" "$INSTALL_DIR/plugins/pi/poke.ts"
+if [ -f "$SRC_DIR/plugins/opencode/peon-poke.ts" ]; then
+  cp "$SRC_DIR/plugins/opencode/peon-poke.ts" "$INSTALL_DIR/plugins/opencode/peon-poke.ts"
+fi
 if [ -f "$SRC_DIR/uninstall.sh" ]; then
   cp "$SRC_DIR/uninstall.sh" "$INSTALL_DIR/uninstall.sh"
   chmod +x "$INSTALL_DIR/uninstall.sh"
@@ -224,35 +227,48 @@ else
   info "Codex not detected (~/.codex) — skipping"
 fi
 
-# --- install pi / oh-my-pi extension ---
+# --- install agent extension/plugin files (ownership-guarded) ---
+# install_owned_file <src> <dest>: never clobbers a foreign file; keeps one
+# stable .peon-poke-bak of a user-modified copy of ours before refreshing.
+# Recognized-as-ours: the setup marker, or the pre-marker pi header.
+install_owned_file() {
+  local src="$1" dest="$2"
+  if [ -e "$dest" ]; then
+    if [ ! -f "$dest" ]; then
+      warn "$dest exists but is not a regular file — skipping"
+      return 0
+    fi
+    if ! head -n 8 "$dest" | grep -q 'peon-poke-setup\|pi (and oh-my-pi) extension'; then
+      warn "$dest exists but is not recognized as ours — left untouched"
+      return 0
+    fi
+    if [ ! -f "$dest.peon-poke-bak" ] && ! cmp -s "$dest" "$src"; then
+      cp "$dest" "$dest.peon-poke-bak"
+      info "Existing file saved to $dest.peon-poke-bak (modified copy preserved)"
+    fi
+  fi
+  cp "$src" "$dest"
+  info "Installed: $dest"
+}
+
+# pi / oh-my-pi extensions
 for ext_dir in "$HOME/.pi/agent/extensions" "$HOME/.omp/agent/extensions"; do
   if [ -d "$ext_dir" ]; then
-    DEST="$ext_dir/peon-poke.ts"
-    if [ -e "$DEST" ]; then
-      # Ownership: only refresh files we recognize as ours (setup marker or
-      # the pre-marker header). A foreign/unknown file named peon-poke.ts is
-      # never clobbered.
-      if [ ! -f "$DEST" ]; then
-        warn "$DEST exists but is not a regular file — skipping"
-        continue
-      fi
-      if ! head -n 8 "$DEST" | grep -q 'peon-poke-setup\|pi (and oh-my-pi) extension'; then
-        warn "$DEST exists but is not recognized as ours — left untouched"
-        continue
-      fi
-      # Recognized as ours but modified (user tweaks)? Keep one stable copy
-      # of their version before the first refresh overwrites it.
-      if [ ! -f "$DEST.peon-poke-bak" ] && ! cmp -s "$DEST" "$INSTALL_DIR/plugins/pi/poke.ts"; then
-        cp "$DEST" "$DEST.peon-poke-bak"
-        info "Existing extension saved to $DEST.peon-poke-bak (modified copy preserved)"
-      fi
-    fi
-    cp "$INSTALL_DIR/plugins/pi/poke.ts" "$DEST"
-    info "Extension installed: $DEST"
+    install_owned_file "$INSTALL_DIR/plugins/pi/poke.ts" "$ext_dir/peon-poke.ts"
   else
     info "$(basename "$(dirname "$(dirname "$ext_dir")")") not detected ($ext_dir) — skipping"
   fi
 done
+
+# OpenCode plugin: auto-discovered from ~/.config/opencode/plugin/ —
+# verified against opencode 1.18: no config edits needed at all.
+OC_PLUGIN_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/opencode/plugin"
+if [ -d "$(dirname "$OC_PLUGIN_DIR")" ]; then
+  mkdir -p "$OC_PLUGIN_DIR"
+  install_owned_file "$INSTALL_DIR/plugins/opencode/peon-poke.ts" "$OC_PLUGIN_DIR/peon-poke.ts"
+else
+  info "OpenCode not detected ($OC_PLUGIN_DIR) — skipping"
+fi
 
 # --- install the peon-poke-uninstall command ---
 if [ -f "$INSTALL_DIR/uninstall.sh" ]; then

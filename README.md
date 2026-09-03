@@ -6,7 +6,7 @@
 
 ![macOS](https://img.shields.io/badge/macOS-blue) ![Force Touch](https://img.shields.io/badge/Force_Touch_trackpad-required-ffab01) ![License](https://img.shields.io/badge/license-MIT-green)
 
-![Claude Code](https://img.shields.io/badge/Claude_Code-hook-ffab01) ![Codex](https://img.shields.io/badge/Codex-adapter-ffab01) ![pi](https://img.shields.io/badge/pi-extension-ffab01) ![oh-my-pi](https://img.shields.io/badge/oh--my--pi-extension-ffab01) ![Gemini CLI](https://img.shields.io/badge/Gemini_CLI-adapter-ffab01) ![Grok Build](https://img.shields.io/badge/Grok_Build-adapter-ffab01) ![Cursor](https://img.shields.io/badge/Cursor-adapter-ffab01)
+![Claude Code](https://img.shields.io/badge/Claude_Code-hook-ffab01) ![Codex](https://img.shields.io/badge/Codex-adapter-ffab01) ![OpenCode](https://img.shields.io/badge/OpenCode-plugin-ffab01) ![pi](https://img.shields.io/badge/pi-extension-ffab01) ![oh-my-pi](https://img.shields.io/badge/oh--my--pi-extension-ffab01) ![Gemini CLI](https://img.shields.io/badge/Gemini_CLI-adapter-ffab01) ![Grok Build](https://img.shields.io/badge/Grok_Build-adapter-ffab01) ![Cursor](https://img.shields.io/badge/Cursor-adapter-ffab01)
 
 **Trackpad haptic notifications on Mac for when your AI coding agent needs you. Office-friendly sibling of [peon-ping](https://github.com/PeonPing/peon-ping).**
 
@@ -80,7 +80,7 @@ Every path ends in the same setup step:
 1. obtains `bin/poke` — Homebrew and the installer use the precompiled universal binary; source installs build with `clang`
 2. installs everything to `~/.peon-poke/`
 3. writes `~/.config/peon-poke/config.json` (kept on reinstall)
-4. registers hooks for every agent it detects: Claude Code, Codex, pi, oh-my-pi
+4. registers hooks for every agent it detects: Claude Code, Codex, OpenCode, pi, oh-my-pi
 
 Quick test:
 
@@ -156,6 +156,7 @@ The pi/oh-my-pi extension also honors `POKE_ARGS` to bypass `poke.sh` and drive 
 |---|---|---|
 | Claude Code | native hooks | automatic (`install.sh`) |
 | Codex | `notify` in `~/.codex/config.toml` | automatic |
+| OpenCode | plugin in `~/.config/opencode/plugin/` (auto-discovered — no config edits) | automatic |
 | pi | extension (`agent_settled`, `ui_prompt_start`) | automatic |
 | oh-my-pi | extension | automatic |
 | Gemini CLI | lifecycle hooks | manual: point hooks at `~/.peon-poke/adapters/gemini.sh <Event>` |
@@ -163,6 +164,8 @@ The pi/oh-my-pi extension also honors `POKE_ARGS` to bypass `poke.sh` and drive 
 | Cursor | `~/.cursor/hooks.json` | manual: `{ "hooks": [{ "event": "stop", "command": "bash ~/.peon-poke/adapters/cursor.sh stop" }] }` (Cursor has no notification/permission hook — see `adapters/cursor.sh`) |
 
 Adapters are thin: read the agent's event (argv or stdin JSON), map to a category, exec `poke.sh <category>`. Porting more of peon-ping's adapters (amp, kimi, qwen, kiro, windsurf, …) follows the same two-dozen-line pattern — PRs welcome.
+
+**OpenCode event mapping** (contract verified against opencode 1.18): `session.idle` → task complete, `session.error` → task error, `permission.updated` → input required, `session.created` → session start (off by default). Note: app-bundled opencode builds that sandbox their config directory (e.g. Zentty's) don't read `~/.config/opencode` — use a standard opencode install.
 
 **Codex with an existing `notify`:** Codex allows exactly one `notify` program. If your `~/.codex/config.toml` already has one (e.g. the Codex desktop app registers its computer-use client), setup preserves it, removes any stray peon-poke entries older setups left behind, and skips registration with a warning. To get pokes as well, wrap both programs in a tiny script of your own and point `notify` at it — Codex passes the same JSON argument through to whatever you invoke.
 

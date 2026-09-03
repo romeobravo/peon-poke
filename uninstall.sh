@@ -168,8 +168,10 @@ PY
   fi
 fi
 
-# --- pi / omp extensions (only files we own; foreign files survive) ---
-for f in "$HOME/.pi/agent/extensions/peon-poke.ts" "$HOME/.omp/agent/extensions/peon-poke.ts"; do
+# --- pi / omp extensions + opencode plugin (only files we own) ---
+for f in "$HOME/.pi/agent/extensions/peon-poke.ts" \
+         "$HOME/.omp/agent/extensions/peon-poke.ts" \
+         "${XDG_CONFIG_HOME:-$HOME/.config}/opencode/plugin/peon-poke.ts"; do
   if [ -f "$f" ]; then
     if head -n 8 "$f" | grep -q 'peon-poke-setup\|pi (and oh-my-pi) extension'; then
       rm -f "$f" "$f.peon-poke-bak" && info "Removed $f"

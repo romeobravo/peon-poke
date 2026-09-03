@@ -21,7 +21,7 @@ bad() { FAIL=$((FAIL+1)); echo "FAIL - $1"; }
 
 run_setup()    { env HOME="$H" bash "$REPO/peon-poke-setup" >>"$TMP/setup.log" 2>&1; }
 run_uninstall(){ env HOME="$H" POKE_DIR="$H/.peon-poke" bash "$REPO/uninstall.sh" "$@" >>"$TMP/uninstall.log" 2>&1; }
-fresh() { rm -rf "$H"; mkdir -p "$H/.codex" "$H/.pi/agent/extensions"; }
+fresh() { rm -rf "$H"; mkdir -p "$H/.codex" "$H/.pi/agent/extensions" "$H/.config/opencode"; }
 
 # ------------------------------------------------- foreign extension file ---
 fresh
@@ -99,6 +99,46 @@ grep -q 'notify' "$H/.codex/config.toml.peon-poke-bak" \
   || ok "uninstall keeps the original codex backup intact"
 cmp -s <(printf 'model = "gpt-5"\n') "$H/.codex/config.toml" \
   && ok "uninstall: codex config restored to original content" || bad "uninstall: codex config not restored"
+
+# ------------------------------------------------- opencode plugin -------
+# foreign plugin file must survive setup AND uninstall
+fresh
+mkdir -p "$H/.config/opencode/plugin"
+cat > "$H/.config/opencode/plugin/peon-poke.ts" <<'EOF'
+// my own plugin that happens to be named peon-poke.ts
+export const Mine = async () => ({})
+EOF
+cp "$H/.config/opencode/plugin/peon-poke.ts" "$TMP/oc-foreign.ts"
+run_setup
+cmp -s "$TMP/oc-foreign.ts" "$H/.config/opencode/plugin/peon-poke.ts" \
+  && ok "setup: foreign opencode plugin left untouched" || bad "setup: foreign opencode plugin clobbered"
+run_uninstall
+[ -f "$H/.config/opencode/plugin/peon-poke.ts" ] \
+  && ok "uninstall: foreign opencode plugin survives" || bad "uninstall: foreign opencode plugin deleted"
+
+# ours: installed by setup, removed by uninstall (dir kept — opencode owns it)
+fresh
+run_setup
+head -n 3 "$H/.config/opencode/plugin/peon-poke.ts" | grep -q "Managed by peon-poke-setup" \
+  && ok "setup: opencode plugin installed with marker" || bad "setup: opencode plugin not installed"
+run_uninstall
+[ ! -e "$H/.config/opencode/plugin/peon-poke.ts" ] \
+  && ok "uninstall: our opencode plugin removed" || bad "uninstall: opencode plugin not removed"
+[ -d "$H/.config/opencode/plugin" ] \
+  && ok "uninstall: opencode plugin directory kept (opencode owns it)" \
+  || bad "uninstall: opencode plugin directory deleted"
+
+# opencode not detected -> skipped
+fresh; rm -rf "$H/.config/opencode"
+run_setup
+grep -q "OpenCode not detected" "$TMP/setup.log" \
+  && ok "setup: opencode skipped when not installed" || bad "setup: opencode not skipped when absent"
+
+# XDG_CONFIG_HOME honored
+fresh; rm -rf "$H/.config/opencode"; mkdir -p "$H/xdg/opencode"
+env HOME="$H" XDG_CONFIG_HOME="$H/xdg" bash "$REPO/peon-poke-setup" >>"$TMP/setup.log" 2>&1
+[ -f "$H/xdg/opencode/plugin/peon-poke.ts" ] \
+  && ok "setup: XDG_CONFIG_HOME honored for opencode plugin" || bad "XDG_CONFIG_HOME not honored"
 
 echo "----"
 echo "ownership: $PASS passed, $FAIL failed"
