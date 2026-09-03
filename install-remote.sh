@@ -3,12 +3,23 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/romeobravo/peon-poke/main/install-remote.sh | bash
 #
-# Fetches the runtime files + precompiled arm64 binary into a temp dir and
-# runs the same install.sh used for source installs. No repo clone needed.
-# Override the source with PEON_POKE_BASE (e.g. a fork or file:// for tests).
+# Runtime files are pinned to the LATEST GITHUB RELEASE, not main — pushing
+# to main never changes what this installs. Only this ~100-line bootstrap
+# itself is served from main. Pin an explicit version instead:
+#   PEON_POKE_BASE=https://raw.githubusercontent.com/romeobravo/peon-poke/v0.4.2 bash install-remote.sh
 set -euo pipefail
 
-BASE="${PEON_POKE_BASE:-https://raw.githubusercontent.com/romeobravo/peon-poke/main}"
+REPO="romeobravo/peon-poke"
+
+if [ -n "${PEON_POKE_BASE:-}" ]; then
+  BASE="$PEON_POKE_BASE"
+else
+  TAG="$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" 2>/dev/null \
+        | python3 -c 'import json,sys; print(json.load(sys.stdin).get("tag_name",""))' 2>/dev/null || true)"
+  [ -n "$TAG" ] || { echo "peon-poke: could not resolve latest release for $REPO" >&2; exit 1; }
+  BASE="https://raw.githubusercontent.com/$REPO/$TAG"
+fi
+echo "> Installing peon-poke from $BASE"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
