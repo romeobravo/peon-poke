@@ -18,6 +18,7 @@ fetch() {
 }
 
 fetch install.sh                 install.sh
+fetch peon-poke-setup            peon-poke-setup
 fetch poke.sh                    poke.sh
 fetch config.json                config.json
 fetch dist/poke-darwin-arm64     dist/poke-darwin-arm64
@@ -25,6 +26,6 @@ fetch plugins/pi/poke.ts         plugins/pi/poke.ts
 for a in codex gemini grok cursor; do
   fetch "adapters/$a.sh"         "adapters/$a.sh"
 done
-chmod +x "$TMP/dist/poke-darwin-arm64"
+chmod +x "$TMP/dist/poke-darwin-arm64" "$TMP/peon-poke-setup"
 
 bash "$TMP/install.sh"

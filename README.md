@@ -37,15 +37,22 @@ Structurally a haptic sibling of [peon-ping](https://github.com/PeonPing/peon-pi
 
 ## Install
 
-### Option 1: Installer script (recommended — precompiled, Apple Silicon)
+### Option 1: Homebrew (recommended)
+
+```bash
+brew install romeobravo/tap/peon-poke
+peon-poke-setup     # registers hooks for detected agents
+```
+
+### Option 2: Installer script (precompiled, Apple Silicon)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/romeobravo/peon-poke/main/install-remote.sh | bash
 ```
 
-Downloads the precompiled arm64 binary plus runtime files and registers hooks for every agent it detects.
+Downloads the precompiled arm64 binary plus runtime files and runs setup automatically.
 
-### Option 2: Inspect & install from source
+### Option 3: Inspect & install from source
 
 ```bash
 git clone https://github.com/romeobravo/peon-poke
@@ -54,11 +61,11 @@ less install.sh src/poke.c   # what you see is what runs
 bash install.sh
 ```
 
-Builds `bin/poke` from source (needs `clang`) and registers the same hooks. Intel Macs: use this option — the prebuilt binary is arm64-only.
+Builds `bin/poke` from source (needs `clang`) and runs setup. Intel Macs: use this option — the prebuilt binary is arm64-only.
 
-Either way the installer:
+Every path ends in the same setup step:
 
-1. builds `bin/poke` from source (Option 2) or uses the precompiled arm64 binary (Option 1)
+1. obtains `bin/poke` — Homebrew and the installer use the precompiled arm64 binary; source installs build with `clang`
 2. installs everything to `~/.peon-poke/`
 3. writes `~/.config/peon-poke/config.json` (kept on reinstall)
 4. registers hooks for every agent it detects: Claude Code, Codex, pi, oh-my-pi
