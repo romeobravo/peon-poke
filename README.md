@@ -6,7 +6,7 @@
 
 ![Claude Code](https://img.shields.io/badge/Claude_Code-hook-ffab01) ![Codex](https://img.shields.io/badge/Codex-adapter-ffab01) ![pi](https://img.shields.io/badge/pi-extension-ffab01) ![oh-my-pi](https://img.shields.io/badge/oh--my--pi-extension-ffab01) ![Gemini CLI](https://img.shields.io/badge/Gemini_CLI-adapter-ffab01) ![Grok Build](https://img.shields.io/badge/Grok_Build-adapter-ffab01) ![Cursor](https://img.shields.io/badge/Cursor-adapter-ffab01)
 
-**Silent trackpad haptics on Mac for when your AI coding agent needs you. Office-friendly sibling of [peon-ping](https://github.com/PeonPing/peon-ping).**
+**Trackpad haptic notifications on Mac for when your AI coding agent needs you. Office-friendly sibling of [peon-ping](https://github.com/PeonPing/peon-ping).**
 
 </div>
 
