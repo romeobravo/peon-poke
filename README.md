@@ -1,4 +1,4 @@
-# peon-boop
+# peon-poke
 
 <div align="center">
 
@@ -6,11 +6,11 @@
 
 ![Claude Code](https://img.shields.io/badge/Claude_Code-hook-ffab01) ![Codex](https://img.shields.io/badge/Codex-adapter-ffab01) ![pi](https://img.shields.io/badge/pi-extension-ffab01) ![oh-my-pi](https://img.shields.io/badge/oh--my--pi-extension-ffab01) ![Gemini CLI](https://img.shields.io/badge/Gemini_CLI-adapter-ffab01) ![Grok Build](https://img.shields.io/badge/Grok_Build-adapter-ffab01) ![Cursor](https://img.shields.io/badge/Cursor-adapter-ffab01)
 
-**Trackpad haptic patterns when your AI coding agent needs attention.**
+**Silent trackpad haptics on Mac for when your AI coding agent needs you. Office-friendly sibling of [peon-ping](https://github.com/PeonPing/peon-ping).**
 
 </div>
 
-AI coding agents don't notify you when they finish or need permission. You tab away, lose focus, and waste minutes getting back into flow. `peon-boop` fixes this the quiet way: instead of sound, it **boops your Force Touch trackpad** — no volume, no headphones required, nobody around you hears a thing. Your finger resting on the glass is all it takes.
+AI coding agents don't notify you when they finish or need permission. You tab away, lose focus, and waste minutes getting back into flow. `peon-poke` fixes this the quiet way: instead of sound, it **boops your Force Touch trackpad** — no volume, no headphones required, nobody around you hears a thing. Your finger resting on the glass is all it takes.
 
 Structurally a haptic sibling of [peon-ping](https://github.com/PeonPing/peon-ping) (same event taxonomy, adapter architecture, and config style) — but instead of playing Warcraft voice lines, it drives the trackpad actuator directly through the private `MultitouchSupport.framework`. Works **without any finger on the trackpad**, unlike the public `NSHapticFeedbackManager` API.
 
@@ -38,21 +38,21 @@ Structurally a haptic sibling of [peon-ping](https://github.com/PeonPing/peon-pi
 ## Install
 
 ```bash
-git clone <this repo> && cd peon-boop
+git clone <this repo> && cd peon-poke
 bash install.sh
 ```
 
 The installer:
 
-1. builds `bin/boop` and installs everything to `~/.peon-boop/`
-2. writes `~/.config/peon-boop/config.json` (kept on reinstall)
+1. builds `bin/poke` and installs everything to `~/.peon-poke/`
+2. writes `~/.config/peon-poke/config.json` (kept on reinstall)
 3. registers hooks for every agent it detects: Claude Code, Codex, pi, oh-my-pi
 
 Quick test:
 
 ```bash
-~/.peon-boop/bin/boop           # chirp, the default boop
-~/.peon-boop/bin/boop skrrt     # audition a named pattern
+~/.peon-poke/bin/poke           # chirp, the default boop
+~/.peon-poke/bin/poke skrrt     # audition a named pattern
 ```
 
 ## Patterns
@@ -60,9 +60,9 @@ Quick test:
 `boop` is driven by **gap sequences**: a comma-separated list of millisecond gaps between pulses (one pulse per gap, plus a final pulse):
 
 ```bash
-~/.peon-boop/bin/boop                 # default: chirp
-~/.peon-boop/bin/boop 60,120,40,80     # your own rhythm
-~/.peon-boop/bin/boop [60, 120, 40]    # brackets/spaces also fine
+~/.peon-poke/bin/poke                 # default: chirp
+~/.peon-poke/bin/poke 60,120,40,80     # your own rhythm
+~/.peon-poke/bin/poke [60, 120, 40]    # brackets/spaces also fine
 ```
 
 Built-in named patterns:
@@ -77,11 +77,11 @@ Built-in named patterns:
 | `heartbeat` | `200,700,200,700,200,700` | gentle heartbeat pairs |
 | `slowdown` | `200,162,132,107,87,70,57,46,37,30,25,20` | precomputed exponential ramp, classic decelerando |
 
-Click intensity defaults to 6 (firm); override with `BOOP_PATTERN` (valid ids: 1–6, 15, 16 — 1 is a light tick, 15/16 deep thunks).
+Click intensity defaults to 6 (firm); override with `POKE_PATTERN` (valid ids: 1–6, 15, 16 — 1 is a light tick, 15/16 deep thunks).
 
 ## Configuration
 
-Everything lives in `~/.config/peon-boop/config.json`:
+Everything lives in `~/.config/peon-poke/config.json`:
 
 ```json
 {
@@ -106,7 +106,7 @@ Everything lives in `~/.config/peon-boop/config.json`:
 - `categories` — which events boop at all (taxonomy shared with peon-ping)
 - `patterns` — any named pattern or a raw gap list works, e.g. `"task.complete": "60,120,40"`
 
-The pi/oh-my-pi extension also honors `BOOP_ARGS` to bypass `boop.sh` and drive `bin/boop` directly (names or gap lists).
+The pi/oh-my-pi extension also honors `POKE_ARGS` to bypass `poke.sh` and drive `bin/poke` directly (names or gap lists).
 
 ## Agent support
 
@@ -116,19 +116,19 @@ The pi/oh-my-pi extension also honors `BOOP_ARGS` to bypass `boop.sh` and drive 
 | Codex | `notify` in `~/.codex/config.toml` | automatic |
 | pi | extension (`agent_settled`, `ui_prompt_start`) | automatic |
 | oh-my-pi | extension | automatic |
-| Gemini CLI | lifecycle hooks | manual: point hooks at `~/.peon-boop/adapters/gemini.sh <Event>` |
-| Grok Build | `~/.grok/hooks/peon-boop.json` | manual: `"command": "bash ~/.peon-boop/adapters/grok.sh"` |
+| Gemini CLI | lifecycle hooks | manual: point hooks at `~/.peon-poke/adapters/gemini.sh <Event>` |
+| Grok Build | `~/.grok/hooks/peon-poke.json` | manual: `"command": "bash ~/.peon-poke/adapters/grok.sh"` |
 | Cursor | `~/.cursor/hooks.json` | manual: see header of `adapters/cursor.sh` |
 
-Adapters are thin: read the agent's event (argv or stdin JSON), map to a category, exec `boop.sh <category>`. Porting more of peon-ping's adapters (amp, kimi, qwen, kiro, windsurf, …) follows the same two-dozen-line pattern — PRs welcome.
+Adapters are thin: read the agent's event (argv or stdin JSON), map to a category, exec `poke.sh <category>`. Porting more of peon-ping's adapters (amp, kimi, qwen, kiro, windsurf, …) follows the same two-dozen-line pattern — PRs welcome.
 
 ## How it works
 
 ```
-agent event ──► adapter / hook ──► boop.sh <category>
+agent event ──► adapter / hook ──► poke.sh <category>
                                       │  config.json: enabled? which pattern?
                                       ▼
-                                  bin/boop <pattern args>
+                                  bin/poke <pattern args>
                                       │  MultitouchSupport.framework (private)
                                       ▼
                                   trackpad actuator 💥
@@ -143,7 +143,7 @@ agent event ──► adapter / hook ──► boop.sh <category>
 ## Uninstall
 
 ```bash
-bash uninstall.sh          # removes hooks + ~/.peon-boop, keeps config
+bash uninstall.sh          # removes hooks + ~/.peon-poke, keeps config
 bash uninstall.sh --purge  # also removes config
 ```
 
@@ -153,7 +153,7 @@ bash uninstall.sh --purge  # also removes config
 
 **Does it work on Magic Trackpad 2/3?** Yes, when connected.
 
-**Why did nothing happen?** Run `~/.peon-boop/bin/boop boop` — if the single click doesn't fire, you have no Force Touch hardware. If it fires but hooks don't, check `categories` in config.json.
+**Why did nothing happen?** Run `~/.peon-poke/bin/poke boop` — if the single click doesn't fire, you have no Force Touch hardware. If it fires but hooks don't, check `categories` in config.json.
 
 **Is this safe?** The actuator is driven exactly as macOS itself drives it. The API is private and may break between macOS releases (exit code stays 0 so agents are never disturbed).
 

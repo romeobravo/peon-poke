@@ -1,5 +1,5 @@
 /*
- * boop.c — peon-boop core: fire the trackpad's Force Touch actuator on
+ * poke.c — peon-poke core: fire the trackpad's Force Touch actuator on
  * demand, with NO finger/gesture requirement, via the private
  * MultitouchSupport.framework (same technique as HapticKey).
  *
@@ -21,12 +21,12 @@
  *   heartbeat 200,700,200,700,200,700
  *   slowdown  200,162,132,107,87,70,57,46,37,30,25,20 (precomputed exp ramp)
  *
- * Click intensity (actuation id) defaults to 6; override with BOOP_PATTERN
+ * Click intensity (actuation id) defaults to 6; override with POKE_PATTERN
  * (valid ids: 1-6, 15, 16).
  *
- * Set BOOP_QUIET=1 to suppress informational output (hook mode).
+ * Set POKE_QUIET=1 to suppress informational output (hook mode).
  *
- * Build:  clang -O2 -Wall -o boop boop.c -framework IOKit -framework CoreFoundation
+ * Build:  clang -O2 -Wall -o poke poke.c -framework IOKit -framework CoreFoundation
  *
  * Private API: fine for personal tooling, will be rejected by the App
  * Store, and may break between macOS releases.
@@ -59,7 +59,7 @@ static kern_return_t (*MTActuatorOpen)(mt_actuator_ref);
 static int           (*MTActuatorActuate)(mt_actuator_ref, int, int, void *, void *);
 static kern_return_t (*MTActuatorClose)(mt_actuator_ref);
 
-static bool quiet(void) { return getenv("BOOP_QUIET") != NULL; }
+static bool quiet(void) { return getenv("POKE_QUIET") != NULL; }
 static void msg(const char *fmt, ...)
 {
     if (quiet()) return;
@@ -71,7 +71,7 @@ static void msg(const char *fmt, ...)
 
 static void die(const char *msg)
 {
-    fprintf(stderr, "boop: %s\n", msg);
+    fprintf(stderr, "poke: %s\n", msg);
     exit(0); /* hooks must never fail the host agent */
 }
 
@@ -95,7 +95,7 @@ static mt_actuator_ref (*resolve_MTActuatorCreate(void))(io_service_t, uint64_t)
             int32_t imm = (int32_t)(fn[i + 1] & 0x03FFFFFF);
             imm = (imm << 6) >> 6;                    /* sign-extend 26-bit */
             uintptr_t target = (uintptr_t)&fn[i + 1] + (uintptr_t)(imm * 4);
-            msg("[boop] resolved MTActuatorCreate at %p\n", (void *)target);
+            msg("[poke] resolved MTActuatorCreate at %p\n", (void *)target);
             return (mt_actuator_ref (*)(io_service_t, uint64_t))(void *)target;
         }
     }
@@ -140,7 +140,7 @@ static void play_sequence(mt_actuator_ref act, int id, const char *spec)
 static void usage(void)
 {
     fprintf(stderr,
-        "usage: boop [name | g1,g2,...,gN]\n"
+        "usage: poke [name | g1,g2,...,gN]\n"
         "  names: boop chirp skrrt callme rimshot heartbeat slowdown\n"
         "  gaps:  milliseconds between pulses, e.g. boop 60,120,40\n");
 }
@@ -207,11 +207,11 @@ int main(int argc, char **argv)
     if (!act) die("could not create actuator (Force Touch trackpad present?)");
     if (MTActuatorOpen(act) != 0) die("MTActuatorOpen failed");
 
-    msg("[boop] device %llx actuator %p\n", (unsigned long long)dev_id, act);
+    msg("[poke] device %llx actuator %p\n", (unsigned long long)dev_id, act);
 
     int id = 6;
-    if (getenv("BOOP_PATTERN")) {
-        int v = atoi(getenv("BOOP_PATTERN"));
+    if (getenv("POKE_PATTERN")) {
+        int v = atoi(getenv("POKE_PATTERN"));
         if (v >= 1) id = v;
     }
 

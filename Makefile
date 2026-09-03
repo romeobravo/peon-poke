@@ -4,9 +4,9 @@ FRAMEWORKS := -framework IOKit -framework CoreFoundation
 
 .PHONY: all clean install
 
-all: bin/boop
+all: bin/poke
 
-bin/boop: src/boop.c
+bin/poke: src/poke.c
 	@mkdir -p bin
 	$(CC) $(CFLAGS) -o $@ $< $(FRAMEWORKS)
 

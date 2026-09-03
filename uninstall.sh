@@ -1,9 +1,9 @@
 #!/bin/bash
-# peon-boop uninstaller: removes hook registrations and installed files.
+# peon-poke uninstaller: removes hook registrations and installed files.
 set -euo pipefail
 
-INSTALL_DIR="${BOOP_DIR:-$HOME/.peon-boop}"
-CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/peon-boop"
+INSTALL_DIR="${POKE_DIR:-$HOME/.peon-poke}"
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/peon-poke"
 
 info() { printf "> %s\n" "$*"; }
 
@@ -19,7 +19,7 @@ except Exception:
     raise SystemExit(1)
 hooks = cfg.get("hooks", {})
 for event, entries in list(hooks.items()):
-    kept = [e for e in entries if "peon-boop" not in json.dumps(e)]
+    kept = [e for e in entries if "peon-poke" not in json.dumps(e)]
     if kept:
         hooks[event] = kept
     else:
@@ -31,20 +31,20 @@ fi
 
 # Codex: remove managed notify block
 CODEX_TOML="$HOME/.codex/config.toml"
-if [ -f "$CODEX_TOML" ] && grep -q "peon-boop" "$CODEX_TOML"; then
+if [ -f "$CODEX_TOML" ] && grep -q "peon-poke" "$CODEX_TOML"; then
   python3 - "$CODEX_TOML" <<'PY' && info "Codex notify removed"
 import sys
 path = sys.argv[1]
 lines = open(path).readlines()
 out, skip_next = [], False
 for line in lines:
-    if "peon-boop" in line and line.strip().startswith("#"):
+    if "peon-poke" in line and line.strip().startswith("#"):
         skip_next = True
         continue
     if skip_next:
         skip_next = False
         continue
-    if "peon-boop" in line:
+    if "peon-poke" in line:
         continue
     out.append(line)
 open(path, "w").writelines(out)
@@ -52,7 +52,7 @@ PY
 fi
 
 # pi / omp extensions
-for f in "$HOME/.pi/agent/extensions/peon-boop.ts" "$HOME/.omp/agent/extensions/peon-boop.ts"; do
+for f in "$HOME/.pi/agent/extensions/peon-poke.ts" "$HOME/.omp/agent/extensions/peon-poke.ts"; do
   [ -f "$f" ] && rm -f "$f" && info "Removed $f"
 done
 

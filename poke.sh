@@ -1,7 +1,7 @@
 #!/bin/bash
-# peon-boop dispatcher: maps agent event categories to haptic patterns.
+# peon-poke dispatcher: maps agent event categories to haptic patterns.
 #
-# Usage: boop.sh <category>
+# Usage: poke.sh <category>
 #
 # Categories (same taxonomy as peon-ping):
 #   session.start     new agent session began
@@ -13,14 +13,14 @@
 # Patterns are configured in config.json (see repo config.json).
 set -uo pipefail
 
-BOOP_DIR="${BOOP_DIR:-$HOME/.peon-boop}"
-BOOP_BIN="${BOOP_BIN:-$BOOP_DIR/bin/boop}"
-CONFIG="${BOOP_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/peon-boop/config.json}"
-[ -f "$CONFIG" ] || CONFIG="$BOOP_DIR/config.json"
+POKE_DIR="${POKE_DIR:-$HOME/.peon-poke}"
+POKE_BIN="${POKE_BIN:-$POKE_DIR/bin/poke}"
+CONFIG="${POKE_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/peon-poke/config.json}"
+[ -f "$CONFIG" ] || CONFIG="$POKE_DIR/config.json"
 
 CATEGORY="${1:-}"
 [ -n "$CATEGORY" ] || exit 0
-[ -x "$BOOP_BIN" ] || exit 0
+[ -x "$POKE_BIN" ] || exit 0
 command -v python3 >/dev/null 2>&1 || exit 0
 
 PATTERN="$(python3 - "$CONFIG" "$CATEGORY" <<'PY' 2>/dev/null
@@ -42,4 +42,4 @@ PY
 
 # Detached + quiet: hooks must never block or spam the host agent.
 # shellcheck disable=SC2086
-BOOP_QUIET=1 "$BOOP_BIN" $PATTERN >/dev/null 2>&1 &
+POKE_QUIET=1 "$POKE_BIN" $PATTERN >/dev/null 2>&1 &

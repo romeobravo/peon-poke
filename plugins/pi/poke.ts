@@ -1,27 +1,27 @@
 /**
- * peon-boop — pi (and oh-my-pi) extension
+ * peon-poke — pi (and oh-my-pi) extension
  * Buzzes the trackpad when the agent is ready for input.
  *
- * Routes through boop.sh so pattern config stays centralized in
+ * Routes through poke.sh so pattern config stays centralized in
  * config.json (default task.complete pattern: `chirp`).
- * Set BOOP_ARGS to bypass boop.sh and drive bin/boop directly.
+ * Set POKE_ARGS to bypass poke.sh and drive bin/poke directly.
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { spawn } from "node:child_process";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-const DIR = process.env.BOOP_DIR ?? join(homedir(), ".peon-boop");
-const ARGS = (process.env.BOOP_ARGS ?? "").split(/\s+/).filter(Boolean);
+const DIR = process.env.POKE_DIR ?? join(homedir(), ".peon-poke");
+const ARGS = (process.env.POKE_ARGS ?? "").split(/\s+/).filter(Boolean);
 
 function fire(category: string) {
   try {
     const child = ARGS.length
-      ? spawn(join(DIR, "bin/boop"), ARGS, { detached: true, stdio: "ignore" })
-      : spawn("bash", [join(DIR, "boop.sh"), category], { detached: true, stdio: "ignore" });
+      ? spawn(join(DIR, "bin/poke"), ARGS, { detached: true, stdio: "ignore" })
+      : spawn("bash", [join(DIR, "poke.sh"), category], { detached: true, stdio: "ignore" });
     child.unref();
   } catch {
-    // never let a failed boop break the session
+    // never let a failed poke break the session
   }
 }
 
