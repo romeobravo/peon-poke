@@ -11,6 +11,7 @@
 #   input.required    agent needs permission/input
 #
 # Patterns are configured in config.json (see repo config.json).
+# config.json also supports "strength": 1-6 (click intensity, default 6).
 set -uo pipefail
 
 POKE_DIR="${POKE_DIR:-$HOME/.peon-poke}"
@@ -23,7 +24,7 @@ CATEGORY="${1:-}"
 [ -x "$POKE_BIN" ] || exit 0
 command -v python3 >/dev/null 2>&1 || exit 0
 
-PATTERN="$(python3 - "$CONFIG" "$CATEGORY" <<'PY' 2>/dev/null
+PATTERN_STRENGTH="$(python3 - "$CONFIG" "$CATEGORY" <<'PY' 2>/dev/null
 import json, sys
 try:
     with open(sys.argv[1]) as f:
@@ -36,10 +37,13 @@ if not cfg.get("enabled", True):
 if not cfg.get("categories", {}).get(cat, False):
     sys.exit(1)
 print(cfg.get("patterns", {}).get(cat, ""))
+print(cfg.get("strength", 6))
 PY
 )" || exit 0
+PATTERN="$(printf '%s\n' "$PATTERN_STRENGTH" | sed -n 1p)"
+STRENGTH="$(printf '%s\n' "$PATTERN_STRENGTH" | sed -n 2p)"
 [ -n "$PATTERN" ] || exit 0
 
 # Detached + quiet: hooks must never block or spam the host agent.
 # shellcheck disable=SC2086
-POKE_QUIET=1 "$POKE_BIN" $PATTERN >/dev/null 2>&1 &
+POKE_QUIET=1 POKE_PATTERN="$STRENGTH" "$POKE_BIN" $PATTERN >/dev/null 2>&1 &

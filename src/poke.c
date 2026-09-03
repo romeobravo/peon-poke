@@ -4,25 +4,28 @@
  * MultitouchSupport.framework (same technique as HapticKey).
  *
  * Usage:
- *   boop                      default pattern: chirp
- *   boop <name>               named pattern (see table below)
- *   boop 60,120,40,80         explicit gap sequence, in ms
- *   boop [60, 120, 40, 80]    brackets/spaces also accepted
+ *   poke                      default pattern: fortune
+ *   poke <name>               named pattern (see table below)
+ *   poke 60,120,40,80         explicit gap sequence, in ms
+ *   poke [60, 120, 40, 80]    brackets/spaces also accepted
  *
  * A gap sequence fires one pulse per gap plus a final pulse:
  *   "50,80,50" -> pulse-50ms-pulse-80ms-pulse-50ms-pulse
  *
  * Named patterns:
  *   boop      single firm click
- *   chirp     20,20,20,200,20,20,20,200,20,20,20     (default)
+ *   fortune   50,80,140,240,400 (fortune wheel: fast ticks slowing to a stop)
+ *                                             (default)
+ *   chirp     20,20,20,200,20,20,20,200,20,20,20
  *   skrrt     20,20,20,20,20,20,200,20,20,20,20,20,20
  *   callme    60,120,40,80,40,120,60,300,60,120,60
  *   rimshot   50,80,50,120,150
  *   heartbeat 200,700,200,700,200,700
- *   slowdown  200,162,132,107,87,70,57,46,37,30,25,20 (precomputed exp ramp)
+ *   rampup    200,162,132,107,87,70,57,46,37,30,25,20 (precomputed exp ramp,
+ *             speeds up: slow ... rapid)
  *
  * Click intensity (actuation id) defaults to 6; override with POKE_PATTERN
- * (valid ids: 1-6, 15, 16).
+ * (valid ids: 1-6; anything else falls back to 6).
  *
  * Set POKE_QUIET=1 to suppress informational output (hook mode).
  *
@@ -112,12 +115,13 @@ struct named_pattern {
 
 static const struct named_pattern NAMED[] = {
     { "boop",      NULL },
+    { "fortune",   "50,80,140,240,400" },
     { "chirp",     "20,20,20,200,20,20,20,200,20,20,20" },
     { "skrrt",     "20,20,20,20,20,20,200,20,20,20,20,20,20" },
     { "callme",    "60,120,40,80,40,120,60,300,60,120,60" },
     { "rimshot",   "50,80,50,120,150" },
     { "heartbeat", "200,700,200,700,200,700" },
-    { "slowdown",  "200,162,132,107,87,70,57,46,37,30,25,20" },
+    { "rampup",    "200,162,132,107,87,70,57,46,37,30,25,20" },
 };
 
 /* fire one pulse per gap, plus a final pulse */
@@ -141,7 +145,7 @@ static void usage(void)
 {
     fprintf(stderr,
         "usage: poke [name | g1,g2,...,gN]\n"
-        "  names: boop chirp skrrt callme rimshot heartbeat slowdown\n"
+        "  names: boop fortune chirp skrrt callme rimshot heartbeat rampup\n"
         "  gaps:  milliseconds between pulses, e.g. boop 60,120,40\n");
 }
 
@@ -212,12 +216,12 @@ int main(int argc, char **argv)
     int id = 6;
     if (getenv("POKE_PATTERN")) {
         int v = atoi(getenv("POKE_PATTERN"));
-        if (v >= 1) id = v;
+        if (v >= 1 && v <= 6) id = v;
     }
 
     /* resolve the pattern argument (default: chirp) */
     char spec[512];
-    snprintf(spec, sizeof spec, "%s", argc > 1 ? argv[1] : "chirp");
+    snprintf(spec, sizeof spec, "%s", argc > 1 ? argv[1] : "fortune");
     clean_spec(spec);
 
     if (strcmp(spec, "boop") == 0) {

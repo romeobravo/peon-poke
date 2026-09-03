@@ -1,8 +1,9 @@
 #!/bin/bash
-# peon-poke installer: builds the binary, installs to ~/.peon-poke,
-# copies config, and registers hooks for detected coding agents.
+# peon-poke installer: builds from source (or uses the precompiled arm64
+# binary from dist/), installs to ~/.peon-poke, copies config, and registers
+# hooks for detected coding agents.
 #
-# Usage: bash install.sh [--uninstall-targets]
+# Usage: bash install.sh
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -13,11 +14,18 @@ BOLD=$'\033[1m' GREEN=$'\033[32m' YELLOW=$'\033[33m' RESET=$'\033[0m'
 info() { printf "%s>%s %s\n" "$GREEN" "$RESET" "$*"; }
 warn() { printf "%s!%s %s\n" "$YELLOW" "$RESET" "$*"; }
 
-command -v clang >/dev/null 2>&1 || { warn "clang not found — cannot build boop"; exit 1; }
-
-# --- build + install files ---
-info "Building poke..."
-make -C "$REPO_DIR" >/dev/null
+# --- obtain the binary: source build if possible, else precompiled arm64 ---
+if [ -f "$REPO_DIR/src/poke.c" ] && command -v clang >/dev/null 2>&1; then
+  info "Building poke from source..."
+  make -C "$REPO_DIR" >/dev/null
+elif [ -f "$REPO_DIR/dist/poke-darwin-arm64" ] && [ "$(uname -m)" = "arm64" ]; then
+  info "Using precompiled arm64 binary..."
+  mkdir -p "$REPO_DIR/bin"
+  cp "$REPO_DIR/dist/poke-darwin-arm64" "$REPO_DIR/bin/poke"
+else
+  warn "no source/clang build and no precompiled binary for $(uname -m)"
+  exit 1
+fi
 
 info "Installing to $INSTALL_DIR"
 mkdir -p "$INSTALL_DIR/bin" "$INSTALL_DIR/adapters" "$INSTALL_DIR/plugins/pi"
@@ -93,4 +101,4 @@ done
 echo
 info "${BOLD}peon-poke installed.${RESET} Patterns live in $CONFIG_DIR/config.json"
 echo "  Manual adapters: gemini, grok, cursor — see README.md"
-echo "  Test: $INSTALL_DIR/bin/poke"        # default pattern: chirp
+echo "  Test: $INSTALL_DIR/bin/poke"        # default pattern: fortune

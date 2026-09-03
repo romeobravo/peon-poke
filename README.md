@@ -10,7 +10,7 @@
 
 </div>
 
-AI coding agents don't notify you when they finish or need permission. You tab away, lose focus, and waste minutes getting back into flow. `peon-poke` fixes this the quiet way: instead of sound, it **boops your Force Touch trackpad** — no volume, no headphones required, nobody around you hears a thing. Your finger resting on the glass is all it takes.
+AI coding agents don't notify you when they finish or need permission. You tab away, lose focus, and waste minutes getting back into flow. `peon-poke` fixes this the quiet way: instead of sound, it **pokes your Force Touch trackpad** — no volume, no headphones required. With your hands on the laptop, you feel it right through the trackpad.
 
 Structurally a haptic sibling of [peon-ping](https://github.com/PeonPing/peon-ping) (same event taxonomy, adapter architecture, and config style) — but instead of playing Warcraft voice lines, it drives the trackpad actuator directly through the private `MultitouchSupport.framework`. Works **without any finger on the trackpad**, unlike the public `NSHapticFeedbackManager` API.
 
@@ -37,30 +37,45 @@ Structurally a haptic sibling of [peon-ping](https://github.com/PeonPing/peon-pi
 
 ## Install
 
+### Option 1: Installer script (recommended — precompiled, Apple Silicon)
+
 ```bash
-git clone <this repo> && cd peon-poke
+curl -fsSL https://raw.githubusercontent.com/romeobravo/peon-poke/main/install-remote.sh | bash
+```
+
+Downloads the precompiled arm64 binary plus runtime files and registers hooks for every agent it detects.
+
+### Option 2: Inspect & install from source
+
+```bash
+git clone https://github.com/romeobravo/peon-poke
+cd peon-poke
+less install.sh src/poke.c   # what you see is what runs
 bash install.sh
 ```
 
-The installer:
+Builds `bin/poke` from source (needs `clang`) and registers the same hooks. Intel Macs: use this option — the prebuilt binary is arm64-only.
 
-1. builds `bin/poke` and installs everything to `~/.peon-poke/`
-2. writes `~/.config/peon-poke/config.json` (kept on reinstall)
-3. registers hooks for every agent it detects: Claude Code, Codex, pi, oh-my-pi
+Either way the installer:
+
+1. builds `bin/poke` from source (Option 2) or uses the precompiled arm64 binary (Option 1)
+2. installs everything to `~/.peon-poke/`
+3. writes `~/.config/peon-poke/config.json` (kept on reinstall)
+4. registers hooks for every agent it detects: Claude Code, Codex, pi, oh-my-pi
 
 Quick test:
 
 ```bash
-~/.peon-poke/bin/poke           # chirp, the default boop
+~/.peon-poke/bin/poke           # fortune, the default pattern
 ~/.peon-poke/bin/poke skrrt     # audition a named pattern
 ```
 
 ## Patterns
 
-`boop` is driven by **gap sequences**: a comma-separated list of millisecond gaps between pulses (one pulse per gap, plus a final pulse):
+`poke` is driven by **gap sequences**: a comma-separated list of millisecond gaps between pulses (one pulse per gap, plus a final pulse):
 
 ```bash
-~/.peon-poke/bin/poke                 # default: chirp
+~/.peon-poke/bin/poke                 # default: fortune
 ~/.peon-poke/bin/poke 60,120,40,80     # your own rhythm
 ~/.peon-poke/bin/poke [60, 120, 40]    # brackets/spaces also fine
 ```
@@ -69,15 +84,16 @@ Built-in named patterns:
 
 | Name | Gaps (ms) | Feel |
 |---|---|---|
-| `boop` | — | single firm click |
-| `chirp` *(default)* | `20,20,20,200,20,20,20,200,20,20,20` | zzt · zzt · zzt, crisp notification |
-| `skrrt` | `20,20,20,20,20,20,200,20,20,20,20,20,20` | double rattle, urgent |
-| `callme` | `60,120,40,80,40,120,60,300,60,120,60` | syncopated riff, question-answer |
-| `rimshot` | `50,80,50,120,150` | galloping ba-dum-tss |
-| `heartbeat` | `200,700,200,700,200,700` | gentle heartbeat pairs |
-| `slowdown` | `200,162,132,107,87,70,57,46,37,30,25,20` | precomputed exponential ramp, classic decelerando |
+| 👆 `boop` | — | single firm click |
+| 🎡 `fortune` *(default)* | `50,80,140,240,400` | fortune wheel: fast ticks slowing to a stop |
+| 🐦 `chirp` | `20,20,20,200,20,20,20,200,20,20,20` | zzt · zzt · zzt, crisp notification |
+| 💨 `skrrt` | `20,20,20,20,20,20,200,20,20,20,20,20,20` | double rattle, urgent |
+| 📞 `callme` | `60,120,40,80,40,120,60,300,60,120,60` | syncopated riff, question-answer |
+| 🥁 `rimshot` | `50,80,50,120,150` | galloping ba-dum-tss |
+| 💓 `heartbeat` | `200,700,200,700,200,700` | gentle heartbeat pairs |
+| 🚀 `rampup` | `200,162,132,107,87,70,57,46,37,30,25,20` | precomputed exponential ramp, slow ... rapid |
 
-Click intensity defaults to 6 (firm); override with `POKE_PATTERN` (valid ids: 1–6, 15, 16 — 1 is a light tick, 15/16 deep thunks).
+Click intensity defaults to 6 (firm); override with `POKE_PATTERN` (valid ids: 1–6 — 1 is a light tick, 6 a firm press).
 
 ## Configuration
 
@@ -86,6 +102,7 @@ Everything lives in `~/.config/peon-poke/config.json`:
 ```json
 {
   "enabled": true,
+  "strength": 6,
   "categories": {
     "session.start": false,
     "task.acknowledge": false,
@@ -96,14 +113,15 @@ Everything lives in `~/.config/peon-poke/config.json`:
   "patterns": {
     "session.start": "boop",
     "task.acknowledge": "heartbeat",
-    "task.complete": "chirp",
+    "task.complete": "fortune",
     "task.error": "skrrt",
     "input.required": "callme"
   }
 }
 ```
 
-- `categories` — which events boop at all (taxonomy shared with peon-ping)
+- `strength` — click intensity for all pokes: **1–6** (1 = light tick, 6 = firm press). Default 6; values outside 1–6 fall back to 6
+- `categories` — which events poke at all (taxonomy shared with peon-ping)
 - `patterns` — any named pattern or a raw gap list works, e.g. `"task.complete": "60,120,40"`
 
 The pi/oh-my-pi extension also honors `POKE_ARGS` to bypass `poke.sh` and drive `bin/poke` directly (names or gap lists).
@@ -134,7 +152,7 @@ agent event ──► adapter / hook ──► poke.sh <category>
                                   trackpad actuator 💥
 ```
 
-`boop` talks to the trackpad's haptic actuator through the private `MultitouchSupport.framework` — the same route HapticKey uses — which (unlike `NSHapticFeedbackManager`) does **not** require a finger on the glass while firing. On macOS 26 (Tahoe) several long-standing quirks are handled automatically:
+`poke` talks to the trackpad's haptic actuator through the private `MultitouchSupport.framework` — the same route HapticKey uses — which (unlike `NSHapticFeedbackManager`) does **not** require a finger on the glass while firing. On macOS 26 (Tahoe) several long-standing quirks are handled automatically:
 
 - `MTDeviceGetDeviceID` now writes through an out-pointer
 - `MTActuatorCreateFromDeviceID`'s `IOPropertyMatch` no longer matches, so the actuator service is found by class (`AppleActuatorDevice`)
@@ -149,7 +167,7 @@ bash uninstall.sh --purge  # also removes config
 
 ## FAQ
 
-**Can I feel it without touching the trackpad?** No — haptics are vibration; you need a finger resting on the glass to feel it. But no *press* or gesture is required, unlike the public API.
+**Do I need to keep a finger on the trackpad?** No — haptics are vibration, so you feel them with your hands resting on the laptop, in normal typing position. No press or gesture is ever required, unlike the public API.
 
 **Does it work on Magic Trackpad 2/3?** Yes, when connected.
 
