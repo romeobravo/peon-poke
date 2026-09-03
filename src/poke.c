@@ -11,6 +11,8 @@
  *
  * A gap sequence fires one pulse per gap plus a final pulse:
  *   "50,80,50" -> pulse-50ms-pulse-80ms-pulse-50ms-pulse
+ * Each gap is clamped to 0-10000 ms: usleep takes an unsigned count, so
+ * an unclamped negative gap used to wrap to ~71 minutes.
  *
  * Named patterns:
  *   boop      single firm click
@@ -124,14 +126,27 @@ static const struct named_pattern NAMED[] = {
     { "rampup",    "200,162,132,107,87,70,57,46,37,30,25,20" },
 };
 
-/* fire one pulse per gap, plus a final pulse */
+/* per-gap ceiling in ms — keeps a bad config value from parking a
+ * background process for the better part of an hour */
+#define GAP_MAX_MS 10000
+
+/* fire one pulse per gap, plus a final pulse; NULL spec = single pulse
+ * (also protects NAMED entries with gaps == NULL if the boop special
+ * case in main() ever moves) */
 static void play_sequence(mt_actuator_ref act, int id, const char *spec)
 {
+    if (!spec) {
+        int rc = MTActuatorActuate(act, id, 0, NULL, NULL);
+        msg("pulse (single) ... ret %d\n", rc);
+        return;
+    }
     char *copy = strdup(spec);
     if (!copy) return;
     int n = 1;
     for (char *tok = strtok(copy, ","); tok; tok = strtok(NULL, ",")) {
         int gap = atoi(tok);
+        if (gap < 0) gap = 0;
+        if (gap > GAP_MAX_MS) gap = GAP_MAX_MS;
         int rc = MTActuatorActuate(act, id, 0, NULL, NULL);
         msg("pulse %2d (gap %4dms) ... ret %d\n", n++, gap, rc);
         usleep(gap * 1000);
@@ -219,7 +234,7 @@ int main(int argc, char **argv)
         if (v >= 1 && v <= 6) id = v;
     }
 
-    /* resolve the pattern argument (default: chirp) */
+    /* resolve the pattern argument (default: fortune) */
     char spec[512];
     snprintf(spec, sizeof spec, "%s", argc > 1 ? argv[1] : "fortune");
     clean_spec(spec);

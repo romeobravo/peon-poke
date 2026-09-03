@@ -38,15 +38,21 @@ fi
 
 # --- register Claude Code hooks ---
 if [ -d "$HOME/.claude" ]; then
-  python3 - "$INSTALL_DIR" <<'PY'
-import json, os, sys
+  if python3 - "$INSTALL_DIR" <<'PY'
+import json, os, shutil, sys
 install_dir = sys.argv[1]
 path = os.path.expanduser("~/.claude/settings.json")
-try:
-    with open(path) as f:
-        cfg = json.load(f)
-except Exception:
-    cfg = {}
+cfg = {}
+if os.path.exists(path):
+    try:
+        with open(path) as f:
+            cfg = json.load(f)
+    except Exception as e:
+        sys.stderr.write(f"peon-poke: cannot parse {path} ({e}) — file left untouched\n")
+        sys.exit(1)
+    if not isinstance(cfg, dict):
+        sys.stderr.write(f"peon-poke: {path}: top level is not a JSON object — file left untouched\n")
+        sys.exit(1)
 hooks = cfg.setdefault("hooks", {})
 def add(event, category):
     entries = hooks.setdefault(event, [])
@@ -57,10 +63,16 @@ def add(event, category):
 add("Stop", "task.complete")
 add("Notification", "input.required")
 add("SessionStart", "session.start")
+if os.path.exists(path):
+    shutil.copy2(path, path + ".peon-poke-bak")  # never modify without a backup
 with open(path, "w") as f:
     json.dump(cfg, f, indent=2)
 PY
-  info "Claude Code hooks registered (Stop, Notification, SessionStart)"
+  then
+    info "Claude Code hooks registered (Stop, Notification, SessionStart)"
+  else
+    warn "Claude Code hooks NOT registered — fix ~/.claude/settings.json and re-run peon-poke-setup"
+  fi
 else
   info "Claude Code not detected (~/.claude) — skipping"
 fi

@@ -5,8 +5,10 @@
 #
 # Runtime files are pinned to the LATEST GITHUB RELEASE, not main — pushing
 # to main never changes what this installs. Only this ~100-line bootstrap
-# itself is served from main. Pin an explicit version instead:
-#   PEON_POKE_BASE=https://raw.githubusercontent.com/romeobravo/peon-poke/v0.4.2 bash install-remote.sh
+# itself is served from main. Every fetched file is verified against the
+# release's SHA256SUMS manifest before anything executes. Pin an explicit
+# version instead:
+#   PEON_POKE_BASE=https://raw.githubusercontent.com/romeobravo/peon-poke/v0.4.3 bash install-remote.sh
 set -euo pipefail
 
 REPO="romeobravo/peon-poke"
@@ -24,19 +26,24 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
 fetch() {
-  mkdir -p "$(dirname "$TMP/$2")"
-  curl -fsSL "$BASE/$1" -o "$TMP/$2" || { echo "peon-poke: failed to fetch $1" >&2; exit 1; }
+  mkdir -p "$(dirname "$TMP/$1")"
+  curl -fsSL "$BASE/$1" -o "$TMP/$1" || { echo "peon-poke: failed to fetch $1" >&2; exit 1; }
 }
 
-fetch install.sh                 install.sh
-fetch peon-poke-setup            peon-poke-setup
-fetch poke.sh                    poke.sh
-fetch config.json                config.json
-fetch dist/poke-darwin-arm64     dist/poke-darwin-arm64
-fetch plugins/pi/poke.ts         plugins/pi/poke.ts
-for a in codex gemini grok cursor; do
-  fetch "adapters/$a.sh"         "adapters/$a.sh"
-done
-chmod +x "$TMP/dist/poke-darwin-arm64" "$TMP/peon-poke-setup"
+# The manifest is both the file list and the integrity check: everything
+# it names is fetched, then verified. (Regenerate with scripts/sha256sums.sh.)
+fetch SHA256SUMS
+while IFS= read -r f; do
+  [ -n "$f" ] || continue
+  fetch "$f"
+done < <(awk 'NF {print $2}' "$TMP/SHA256SUMS")
 
+SUMS_OUT="$(cd "$TMP" && shasum -a 256 -c SHA256SUMS 2>&1)" || {
+  echo "peon-poke: integrity check FAILED — aborting, nothing was executed:" >&2
+  printf '%s\n' "$SUMS_OUT" >&2
+  exit 1
+}
+echo "> Integrity verified: $(printf '%s\n' "$SUMS_OUT" | grep -c ': OK$') files (sha256)"
+
+chmod +x "$TMP/dist/poke-darwin-arm64" "$TMP/peon-poke-setup"
 bash "$TMP/install.sh"

@@ -50,7 +50,7 @@ peon-poke-setup     # registers hooks for detected agents
 curl -fsSL https://raw.githubusercontent.com/romeobravo/peon-poke/main/install-remote.sh | bash
 ```
 
-Downloads the precompiled arm64 binary plus runtime files and runs setup automatically.
+Downloads the precompiled arm64 binary plus runtime files, verifies everything against the release's `SHA256SUMS` manifest, and runs setup automatically.
 
 ### Option 3: Inspect & install from source
 
@@ -86,6 +86,8 @@ Quick test:
 ~/.peon-poke/bin/poke 60,120,40,80     # your own rhythm
 ~/.peon-poke/bin/poke [60, 120, 40]    # brackets/spaces also fine
 ```
+
+Each gap is clamped to 0–10000 ms, so a typo can't hang the process.
 
 Built-in named patterns:
 
