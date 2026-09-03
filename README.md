@@ -130,6 +130,9 @@ Everything lives in `~/.config/peon-poke/config.json`:
 - `strength` — click intensity for all pokes: **1–6** (1 = light tick, 6 = firm press). Default 6; values outside 1–6 fall back to 6
 - `categories` — which events poke at all (taxonomy shared with peon-ping)
 - `patterns` — any named pattern or a raw gap list works, e.g. `"task.complete": "60,120,40"`
+- `custom` — define your own named patterns, or override built-ins: `"custom": {"doorbell": "200,700,200,700", "chirp": "40,40,400"}` makes `doorbell` available anywhere a name is used, and redefines `chirp`. Applies wherever patterns resolve (hooks + `poke.sh`); `bin/poke <name>` from a shell uses the built-ins directly
+
+Test any pattern without waiting for an agent: `bash ~/.peon-poke/poke.sh doorbell` (or a raw list: `bash ~/.peon-poke/poke.sh 60,120,40`)
 
 The pi/oh-my-pi extension also honors `POKE_ARGS` to bypass `poke.sh` and drive `bin/poke` directly (names or gap lists).
 

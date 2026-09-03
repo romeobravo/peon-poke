@@ -14,5 +14,8 @@
     "task.complete": "fortune",
     "task.error": "skrrt",
     "input.required": "callme"
+  },
+  "custom": {
+    "doorbell": "200,700,200,700"
   }
 }
