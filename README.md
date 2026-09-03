@@ -148,7 +148,7 @@ The pi/oh-my-pi extension also honors `POKE_ARGS` to bypass `poke.sh` and drive 
 | oh-my-pi | extension | automatic |
 | Gemini CLI | lifecycle hooks | manual: point hooks at `~/.peon-poke/adapters/gemini.sh <Event>` |
 | Grok Build | `~/.grok/hooks/peon-poke.json` | manual: `"command": "bash ~/.peon-poke/adapters/grok.sh"` |
-| Cursor | `~/.cursor/hooks.json` | manual: see header of `adapters/cursor.sh` |
+| Cursor | `~/.cursor/hooks.json` | manual: `{ "hooks": [{ "event": "stop", "command": "bash ~/.peon-poke/adapters/cursor.sh stop" }] }` (Cursor has no notification/permission hook — see `adapters/cursor.sh`) |
 
 Adapters are thin: read the agent's event (argv or stdin JSON), map to a category, exec `poke.sh <category>`. Porting more of peon-ping's adapters (amp, kimi, qwen, kiro, windsurf, …) follows the same two-dozen-line pattern — PRs welcome.
 
