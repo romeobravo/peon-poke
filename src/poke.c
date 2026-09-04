@@ -31,6 +31,12 @@
  *
  * Set POKE_QUIET=1 to suppress informational output (hook mode).
  *
+ * If the MacBook lid is closed (clamshell mode) the built-in trackpad's
+ * actuator is asleep: poke says so on stderr and exits 0. A crash guard
+ * catches SIGBUS/SIGSEGV/SIGILL from the private framework (revoked
+ * IOKit mappings, e.g. display asleep) so the exit-0 invariant holds.
+ * External Magic Trackpads expose no actuator and cannot be poked.
+ *
  * Build:  clang -O2 -Wall -o poke poke.c -framework IOKit -framework CoreFoundation
  *
  * Private API: fine for personal tooling, will be rejected by the App
@@ -45,7 +51,9 @@
 #include <string.h>
 #include <stdarg.h>
 #include <unistd.h>
+#include <signal.h>
 #include <IOKit/IOKitLib.h>
+#include <CoreFoundation/CoreFoundation.h>
 
 #define MT_PATH "/System/Library/PrivateFrameworks/MultitouchSupport.framework/MultitouchSupport"
 
@@ -78,6 +86,44 @@ static void die(const char *msg)
 {
     fprintf(stderr, "poke: %s\n", msg);
     exit(0); /* hooks must never fail the host agent */
+}
+
+/*
+ * Crash guard. With the lid closed (or the display asleep) the internal
+ * trackpad's actuator service can be suspended/terminating, and
+ * MultitouchSupport dies with SIGBUS inside MTActuatorCreate/Open while
+ * touching revoked IOKit mappings. Catch the fault, say something human,
+ * and keep the exit-0 invariant. write() only — fprintf is not
+ * async-signal-safe. Hook mode never sees this: poke.sh redirects stderr.
+ */
+static void crash_guard(int sig)
+{
+    static const char note[] =
+        "poke: can't reach the trackpad actuator (lid closed? trackpad "
+        "asleep? Magic Trackpads unsupported) — nothing fired\n";
+    (void)sig;
+    (void)!write(STDERR_FILENO, note, sizeof note - 1);
+    _exit(0);
+}
+
+/* True when the MacBook lid is closed (clamshell). The internal trackpad
+ * is asleep then; poking would at best fail, at worst crash (above).
+ * Desktop Macs publish no AppleClamshellState -> false. */
+static bool lid_closed(void)
+{
+    io_service_t root = IOServiceGetMatchingService(kIOMainPortDefault,
+                                                    IOServiceMatching("IOPMrootDomain"));
+    if (!root) return false;
+    CFTypeRef v = IORegistryEntryCreateCFProperty(root, CFSTR("AppleClamshellState"),
+                                                  kCFAllocatorDefault, 0);
+    IOObjectRelease(root);
+    if (!v || CFGetTypeID(v) != CFBooleanGetTypeID()) {
+        if (v) CFRelease(v);
+        return false;
+    }
+    bool closed = CFBooleanGetValue(v);
+    CFRelease(v);
+    return closed;
 }
 
 /*
@@ -178,6 +224,19 @@ static void clean_spec(char *s)
 
 int main(int argc, char **argv)
 {
+    /* belt and suspenders before anything touches the private framework */
+    struct sigaction sa;
+    memset(&sa, 0, sizeof sa);
+    sa.sa_handler = crash_guard;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGBUS, &sa, NULL);
+    sigaction(SIGSEGV, &sa, NULL);
+    sigaction(SIGILL, &sa, NULL);
+
+    if (lid_closed())
+        die("lid closed — the built-in trackpad is asleep and Magic "
+            "Trackpads have no actuator, nothing fired");
+
     /* dlopen instead of linking, so we need no copy of the private framework */
     void *lib = dlopen(MT_PATH, RTLD_NOW);
     if (!lib) die(dlerror());

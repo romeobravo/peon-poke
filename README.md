@@ -33,7 +33,7 @@ Structurally a haptic sibling of [peon-ping](https://github.com/PeonPing/peon-pi
 
 ## Requirements
 
-- macOS 12+ (Monterey) with a **Force Touch trackpad** (2015+ MacBook, Magic Trackpad 2/3)
+- macOS 12+ (Monterey) with a **built-in Force Touch trackpad** (2015+ MacBook — external Magic Trackpads are not supported)
 - `python3` (hook registration and adapters)
 - `clang` for builds from source (the Homebrew formula and `git clone` + `bash install.sh` build locally; only the curl installer ships a precompiled binary)
 
@@ -206,7 +206,7 @@ The uninstaller only removes the exact `notify` block it manages in `~/.codex/co
 
 **Do I need to keep a finger on the trackpad?** No — haptics are vibration, so you feel them with your hands resting on the laptop, in normal typing position. No press or gesture is ever required, unlike the public API.
 
-**Does it work on Magic Trackpad 2/3?** Yes, when connected.
+**Does it work on a Magic Trackpad (2/3)?** No. External Magic Trackpads never expose their taptic engine through the private actuator API `poke` drives — only the built-in Force Touch trackpad can be poked. Corollary: with a MacBook lid closed (clamshell mode) the built-in trackpad is asleep, so `poke` prints a short note on stderr and exits without firing — with hooks that's a silent no-op.
 
 **Why did nothing happen?** Run `~/.peon-poke/bin/poke boop` — if the single click doesn't fire, you have no Force Touch hardware. If it fires but hooks don't, check `categories` in config.json.
 
