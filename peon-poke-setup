@@ -34,6 +34,50 @@ if [ -f "$SRC_DIR/uninstall.sh" ]; then
 fi
 chmod +x "$INSTALL_DIR/bin/poke" "$INSTALL_DIR/poke.sh" "$INSTALL_DIR/adapters/"*.sh
 
+# --- ownership markers -------------------------------------------------------
+# The uninstaller's guarded rm -rf is authorized ONLY by these markers: a
+# file carrying a random install identity, stamped into every directory we
+# manage. A path's name or contents must never authorize deletion — users
+# can have unrelated directories that merely look like ours. The identity
+# is stable across re-runs so upgrades keep proving ownership.
+UUID_RE='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+
+gen_install_id() {
+  if command -v uuidgen >/dev/null 2>&1; then
+    uuidgen | tr 'A-Z' 'a-z'
+  elif command -v python3 >/dev/null 2>&1; then
+    python3 -c 'import uuid; print(uuid.uuid4())'
+  else  # 32 hex chars from /dev/urandom, formatted as a UUID
+    od -An -N16 -tx1 /dev/urandom | tr -d ' \n' \
+      | awk '{printf "%s-%s-%s-%s-%s\n", substr($0,1,8), substr($0,9,4), substr($0,13,4), substr($0,17,4), substr($0,21,12)}'
+  fi
+}
+
+# stamp_marker <dir> <marker-name> <kind>: write (or refresh, keeping any
+# existing valid identity) the ownership marker for one managed directory.
+stamp_marker() {
+  local dir="$1" name="$2" kind="$3" f id
+  mkdir -p "$dir"
+  f="$dir/$name"
+  id=""
+  if [ -f "$f" ]; then
+    id="$(sed -n 's/^install_id=//p' "$f" | head -n 1)"
+  fi
+  if ! [[ "$id" =~ $UUID_RE ]]; then
+    id="$(gen_install_id)"
+  fi
+  cat > "$f" <<EOF
+app=peon-poke
+kind=$kind
+install_id=$id
+version=$VERSION_STR
+EOF
+}
+
+VERSION_STR="$(cat "$SRC_DIR/VERSION" 2>/dev/null || echo unknown)"
+stamp_marker "$INSTALL_DIR" ".peon-poke-install" install
+stamp_marker "$CONFIG_DIR" ".peon-poke-config" config
+
 # --- config (never overwrite an existing one) ---
 if [ ! -f "$CONFIG_DIR/config.json" ]; then
   mkdir -p "$CONFIG_DIR"

@@ -6,7 +6,9 @@
 # ~/.config/peon-poke/config.json.
 #
 # Deletion safety: targets are canonicalized and checked against a
-# refuse-list (/, $HOME, empty) and must look like a peon-poke install.
+# refuse-list (/, $HOME, empty) and must carry a peon-poke-setup
+# ownership marker (a file containing a random install identity) — a
+# path's name or shape alone never authorizes deletion.
 # A deliberately custom install location can be forced with
 # POKE_UNSAFE_RM=1 — know what you are doing.
 set -euo pipefail
@@ -14,17 +16,46 @@ set -euo pipefail
 INSTALL_DIR="${POKE_DIR:-$HOME/.peon-poke}"
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/peon-poke"
 
+INSTALL_MARKER=".peon-poke-install"
+CONFIG_MARKER=".peon-poke-config"
+UUID_RE='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+
 info() { printf "> %s\n" "$*"; }
 warn() { printf "! %s\n" "$*" >&2; }
 
 # ---------------------------------------------------------------------------
-# Guarded removal. Usage: safe_rm <dir> <what-this-must-be>
-# Refuses /, $HOME, empty and non-canonical paths, and anything that does
-# not structurally look like a peon-poke install (poke.sh / bin/poke /
-# adapters/ inside, or a path ending in peon-poke). Override: POKE_UNSAFE_RM=1.
+# Ownership markers. peon-poke-setup stamps each directory it manages with
+# a marker file carrying a random install identity. The marker is the ONLY
+# thing that authorizes rm -rf below: a directory merely named "peon-poke"
+# (or containing files that look like an install) could just as well be a
+# user's unrelated directory, so neither shape nor contents suffice.
+# ---------------------------------------------------------------------------
+# marker_ok <marker-file> <kind>: succeeds only when the file was written by
+# peon-poke-setup for this kind of directory (install vs config — the two
+# validators share the format but never accept each other's markers) and
+# carries a well-formed random identity.
+marker_ok() {
+  local file="$1" kind="$2" line app_ok=0 kind_ok=0 id=""
+  [ -f "$file" ] && [ -r "$file" ] || return 1
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      "app=peon-poke") app_ok=1 ;;
+      "kind=$kind")    kind_ok=1 ;;
+      install_id=*)    id="${line#install_id=}" ;;
+    esac
+  done < "$file"
+  [ "$app_ok" = 1 ] && [ "$kind_ok" = 1 ] || return 1
+  [[ "$id" =~ $UUID_RE ]]
+}
+
+# ---------------------------------------------------------------------------
+# Guarded removal. Usage: safe_rm <dir> <marker> <kind> <what-this-is>
+# Refuses /, $HOME, empty and non-canonical paths, and anything that is not
+# stamped with a valid peon-poke ownership marker for that directory kind.
+# Override: POKE_UNSAFE_RM=1.
 # ---------------------------------------------------------------------------
 safe_rm() {
-  local dir="$1" real real_parent home_real
+  local dir="$1" marker="$2" kind="$3" what="$4" real real_parent home_real
   [ -n "$dir" ] || { warn "refusing to remove: empty path"; return 1; }
 
   # Canonicalize (resolve symlinks, trailing slashes, ..) — /tmp vs /private/tmp
@@ -41,13 +72,7 @@ safe_rm() {
       return 1 ;;
   esac
 
-  local looks_like_install=0 suffix_ok=0
-  [ -f "$real/poke.sh" ] || [ -f "$real/bin/poke" ] || [ -d "$real/adapters" ] && looks_like_install=1
-  case "$real" in
-    *.peon-poke|*/peon-poke) suffix_ok=1 ;;
-  esac
-
-  if [ "$looks_like_install" = 1 ] || [ "$suffix_ok" = 1 ]; then
+  if marker_ok "$real/$marker" "$kind"; then
     rm -rf "$real" && info "Removed $real"
     return 0
   fi
@@ -58,8 +83,8 @@ safe_rm() {
     return 0
   fi
 
-  warn "refusing to remove '$real': not recognizable as a peon-poke install"
-  warn "(custom install dir? re-run with POKE_UNSAFE_RM=1 if you are sure)"
+  warn "refusing to remove '$real': no valid peon-poke $what ownership marker"
+  warn "(install predates markers? re-run peon-poke-setup — or POKE_UNSAFE_RM=1 if you are sure)"
   return 1
 }
 
@@ -190,9 +215,9 @@ for d in "$HOME/.local/bin" "$HOME/bin" /usr/local/bin; do
 done
 
 # --- installed files (config kept unless --purge) ---
-safe_rm "$INSTALL_DIR"
+safe_rm "$INSTALL_DIR" "$INSTALL_MARKER" install "runtime"
 if [ "${1:-}" = "--purge" ]; then
-  safe_rm "$CONFIG_DIR"
+  safe_rm "$CONFIG_DIR" "$CONFIG_MARKER" config "configuration"
 else
   info "Kept $CONFIG_DIR/config.json (use --purge to remove)"
 fi

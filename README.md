@@ -200,7 +200,7 @@ peon-poke-uninstall --purge  # also removes config
 bash ~/.peon-poke/uninstall.sh [--purge]
 ```
 
-The uninstaller only removes the exact `notify` block it manages in `~/.codex/config.toml` and its own entries in `~/.claude/settings.json` (both backed up first, and re-runs never overwrite your original `*.peon-poke-bak` rollback point) — your own notes and settings survive byte-for-byte. Extension files it doesn't recognize as peon-poke's are left in place. Deletion targets are canonicalized and checked against a refuse-list (`/`, your home, anything not recognizable as a peon-poke install); deliberately custom install locations can be forced with `POKE_UNSAFE_RM=1`.
+The uninstaller only removes the exact `notify` block it manages in `~/.codex/config.toml` and its own entries in `~/.claude/settings.json` (both backed up first, and re-runs never overwrite your original `*.peon-poke-bak` rollback point) — your own notes and settings survive byte-for-byte. Extension files it doesn't recognize as peon-poke's are left in place. A directory is deleted only when it carries an ownership marker stamped by `peon-poke-setup` (`.peon-poke-install` / `.peon-poke-config`, containing a random install identity) — a path's name or contents never authorizes deletion, so unrelated directories that merely happen to be named `peon-poke` are safe. Refuse-list: `/` and your home. Installs made before v0.6.1 have no marker: re-run `peon-poke-setup` once, or force a deliberately custom location with `POKE_UNSAFE_RM=1`.
 
 ## FAQ
 

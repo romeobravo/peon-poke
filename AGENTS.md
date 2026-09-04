@@ -14,6 +14,7 @@ These bit us once; don't relearn them:
 6. **Two artifacts, one truth.** The repo and the live `~/.peon-poke/` install drift the moment you edit one. After touching `src/poke.c`, `poke.sh`, or the config schema: rebuild, `cp` into `~/.peon-poke/`, and fire through the dispatcher. Hook output is suppressed by design, so verify the detached child with `pgrep -fl bin/poke` — it shows the resolved pattern name and caught several would-be silent misroutes.
 7. **Nothing fetched at install time may come from a mutable ref.** External review flagged that the curl installer pulled its payload from `main` — every push was a silent release. Fixed by resolving the latest release tag (plus `SHA256SUMS`). Keep it that way: new install-time files must be tag-served and manifest-verified, always.
 8. **Verify repo state after `gh` mutations.** Visibility flipped unnoticed at one point; `gh repo view --json visibility` after operations that touch repo settings is cheap insurance.
+9. **A directory's name is not an ownership proof.** The uninstaller once authorized `rm -rf` for any path ending in `peon-poke` — an external audit reproduced it deleting an unrelated `precious/peon-poke/`. **Rule: deletion is authorized only by an ownership marker stamped by `peon-poke-setup` (`.peon-poke-install` / `.peon-poke-config`, carrying a random install identity, distinct per directory kind). Never add back basename/shape/contents heuristics to `safe_rm`.**
 
 ## Editing hygiene for agents
 
@@ -27,6 +28,7 @@ These bit us once; don't relearn them:
 - Gap values are clamped to 0–10000 ms (`GAP_MAX_MS` in `play_sequence`): `usleep` takes an unsigned count, so an unclamped negative gap parks the process for ~71 minutes.
 - `poke.sh` fires detached, quiet, and never blocks the calling agent.
 - `peon-poke-setup` never clobbers `~/.claude/settings.json`: on parse failure it skips Claude registration and leaves the file byte-identical; otherwise it writes `settings.json.peon-poke-bak` before modifying. `config.json` is only created if missing, never overwritten.
+- The uninstaller's `safe_rm` deletes a directory **only** when it contains a valid ownership marker (`.peon-poke-install` for the runtime dir, `.peon-poke-config` for the config dir — each validator rejects the other kind) with a well-formed random install identity. Path shape, basename, and install-looking contents must never authorize deletion. If you change the marker format, change `peon-poke-setup` and `uninstall.sh` in the same commit — they ship together.
 - `install-remote.sh` verifies every fetched file against `SHA256SUMS` **before executing anything**, and hard-fails if the manifest is missing at the install base. The manifest also drives the fetch list — it must include `uninstall.sh` (setup copies it into `~/.peon-poke/` and installs the `peon-poke-uninstall` command) and the universal dist binary.
 
 ## Build & smoke test
