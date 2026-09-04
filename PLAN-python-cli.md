@@ -111,6 +111,23 @@ so they use the install path directly.
 - `test-install-remote.sh` — `peon-poke` added to the expected payload set.
 - CI: `python3 -m py_compile peon-poke` added to the syntax-check step.
 
+## Shim retirement path (not now)
+
+Every shim has a live external consumer, so none can be dropped in this
+change. They can be retired later, in order:
+
+1. Update the tap formula to `libexec.install "peon-poke", "config.json",
+   "adapters", "plugins", "bin"` (drop `poke.sh`/`peon-poke-setup`/
+   `uninstall.sh`) and ship a release with README wiring pointing at
+   `~/.peon-poke/bin/peon-poke <gemini|cursor|grok|uninstall>` directly.
+2. Wait a deprecation window (one or two minors) so users can migrate
+   manual Gemini/Grok/Cursor wiring — peon-poke never rewrites those
+   user-owned configs, so there is nothing to auto-heal.
+3. Delete `poke.sh`, `peon-poke-setup`, `uninstall.sh`, `adapters/*.sh`
+   (and the manifest/allowlist/test entries) in one commit.
+
+Total shim cost today: ~50 lines with zero logic — not worth the breakage.
+
 ## Release coupling (must happen at release time, not now)
 
 - `SHA256SUMS` regenerated (this branch does it) and `install-remote.sh`
