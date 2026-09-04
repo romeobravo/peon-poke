@@ -2,7 +2,9 @@
  * peon-poke — OpenCode plugin
  * Managed by peon-poke-setup: reinstalling peon-poke refreshes this file.
  *
- * Auto-discovered from ~/.config/opencode/plugin/ (no config edits needed).
+ * Auto-discovered from ~/.config/opencode/plugin/ (no config edits
+ * needed). opencode scans both plugin/ and plugins/ — verified against
+ * 1.18.27 — so the singular dir stays supported.
  * Routes through poke.sh so pattern config stays centralized in
  * ~/.config/peon-poke/config.json.
  *

@@ -27,6 +27,14 @@ MSG="${2:-}"
 [ "$(git rev-parse --abbrev-ref HEAD)" = "main" ] || die "not on main"
 git rev-parse -q --verify "refs/tags/v$VERSION" >/dev/null && die "tag v$VERSION already exists locally"
 [ -z "$(git ls-remote --tags origin "refs/tags/v$VERSION")" ] || die "tag v$VERSION already exists on origin"
+# A release must contain exactly its own changes: require a clean
+# worktree (checked BEFORE the build dirties it) and a main in sync with
+# origin, so no forgotten local edit rides along in the release commit
+# or the rebuilt binary.
+[ -z "$(git status --porcelain)" ] || die "worktree not clean — commit or stash first"
+git fetch -q origin || die "cannot fetch origin"
+[ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ] \
+  || die "local main does not match origin/main — pull/push first"
 command -v gh >/dev/null 2>&1 || die "gh CLI not found"
 gh auth status >/dev/null 2>&1 || die "gh not authenticated"
 command -v clang >/dev/null 2>&1 || die "clang not found"
@@ -44,7 +52,10 @@ echo "==> SHA256SUMS regenerated"
 echo "$VERSION" > VERSION
 
 # --- commit, tag, push ---
-git add -A
+# Stage exactly what this release regenerated — never `git add -A`.
+# (Anything else that belongs in the release is already committed,
+# enforced by the clean-worktree preflight.)
+git add VERSION SHA256SUMS dist/poke-darwin-universal
 git diff --cached --quiet && die "nothing to commit for v$VERSION"
 if [ -n "$MSG" ]; then
   git commit -q -m "v$VERSION: $MSG"

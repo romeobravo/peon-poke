@@ -35,7 +35,7 @@ Structurally a haptic sibling of [peon-ping](https://github.com/PeonPing/peon-pi
 
 - macOS 12+ (Monterey) with a **Force Touch trackpad** (2015+ MacBook, Magic Trackpad 2/3)
 - `python3` (hook registration and adapters)
-- `clang` only for source builds (Homebrew and the installer ship a precompiled binary)
+- `clang` for builds from source (the Homebrew formula and `git clone` + `bash install.sh` build locally; only the curl installer ships a precompiled binary)
 
 ### Compatibility matrix
 
@@ -77,7 +77,7 @@ Builds `bin/poke` from source (needs `clang`) and runs setup.
 
 Every path ends in the same setup step:
 
-1. obtains `bin/poke` — Homebrew and the installer use the precompiled universal binary; source installs build with `clang`
+1. obtains `bin/poke` — the curl installer uses the precompiled universal binary; Homebrew and source installs build it locally with `clang`
 2. installs everything to `~/.peon-poke/`
 3. writes `~/.config/peon-poke/config.json` (kept on reinstall)
 4. registers hooks for every agent it detects: Claude Code, Codex, OpenCode, pi, oh-my-pi
@@ -96,7 +96,7 @@ Quick test:
 ```bash
 ~/.peon-poke/bin/poke                 # default: fortune
 ~/.peon-poke/bin/poke 60,120,40,80     # your own rhythm
-~/.peon-poke/bin/poke [60, 120, 40]    # brackets/spaces also fine
+~/.peon-poke/bin/poke '[60, 120, 40]'   # brackets/spaces fine — keep it one argument
 ```
 
 Each gap is clamped to 0–10000 ms, so a typo can't hang the process.

@@ -155,10 +155,12 @@ run_uninstall >/dev/null 2>&1
 # ------------------------------------- real setup/uninstall round-trip -----
 # Markers written by the real peon-poke-setup must satisfy the real
 # uninstaller, and the install identity must be stable across re-runs.
-rm -rf "$H"; mkdir -p "$H/.codex" "$H/.pi/agent/extensions"
-env HOME="$H" bash "$REPO/peon-poke-setup" >/dev/null 2>&1
+# A fake ~/.local/bin is prepended to PATH so setup's uninstall-command
+# loop never reaches the real /usr/local/bin.
+rm -rf "$H"; mkdir -p "$H/.codex" "$H/.pi/agent/extensions" "$H/.local/bin"
+env HOME="$H" PATH="$H/.local/bin:$PATH" bash "$REPO/peon-poke-setup" >/dev/null 2>&1
 ID1="$(sed -n 's/^install_id=//p' "$H/.peon-poke/.peon-poke-install")"
-env HOME="$H" bash "$REPO/peon-poke-setup" >/dev/null 2>&1
+env HOME="$H" PATH="$H/.local/bin:$PATH" bash "$REPO/peon-poke-setup" >/dev/null 2>&1
 ID2="$(sed -n 's/^install_id=//p' "$H/.peon-poke/.peon-poke-install")"
 [ -n "$ID1" ] && [ "$ID1" = "$ID2" ] \
   && ok "setup: install identity stable across re-runs" || bad "setup: identity churned or empty"
@@ -167,6 +169,18 @@ run_uninstall --purge >/dev/null 2>&1
   && ok "uninstall: setup-stamped install dir removed" || bad "uninstall: refused setup-stamped install dir"
 [ ! -d "$H/.config/peon-poke" ] \
   && ok "uninstall: setup-stamped config dir purged" || bad "uninstall: refused setup-stamped config dir"
+
+# ------------------------------- comment-spoofed foreign notify (audit) ---
+# `notify = ["..."] # <our adapter path>` is the user's line: the path
+# only appears in a comment, so uninstall must leave it alone.
+cat > "$TMP/spoof.toml" <<EOF
+notify = ["/usr/bin/true"] # $H/.peon-poke/adapters/codex.sh
+model = "gpt-5"
+EOF
+fresh "$TMP/spoof.toml"; run_uninstall >/dev/null 2>&1
+cmp -s "$TMP/spoof.toml" "$H/.codex/config.toml" \
+  && ok "comment-spoofed foreign notify survives uninstall byte-identically" \
+  || bad "uninstall removed a comment-spoofed foreign notify"
 
 echo "----"
 echo "uninstall: $PASS passed, $FAIL failed"

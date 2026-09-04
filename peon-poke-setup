@@ -90,9 +90,14 @@ fi
 # --- register Claude Code hooks ---
 if [ -d "$HOME/.claude" ]; then
   if python3 - "$INSTALL_DIR" <<'PY'
-import json, os, shutil, sys
+import json, os, re, shutil, sys
 install_dir = sys.argv[1]
 path = os.path.expanduser("~/.claude/settings.json")
+if os.path.islink(path):
+    # Never write through a symlink: it would silently modify whatever
+    # the user pointed it at, which is not ours to touch.
+    sys.stderr.write(f"peon-poke: {path} is a symlink — file left untouched\n")
+    sys.exit(1)
 cfg = {}
 if os.path.exists(path):
     try:
@@ -105,19 +110,43 @@ if os.path.exists(path):
         sys.stderr.write(f"peon-poke: {path}: top level is not a JSON object — file left untouched\n")
         sys.exit(1)
 hooks = cfg.setdefault("hooks", {})
+
+# Exact ownership: an entry is ours only if it is precisely the hook
+# shape this setup writes (any install dir, quoted or not). A user's own
+# hook that merely mentions "peon-poke" must be neither skipped-over on
+# registration nor deleted on uninstall.
+CATEGORIES = ("session.start", "task.complete", "task.error",
+              "task.acknowledge", "input.required")
+our_hook_re = re.compile(
+    r'^bash (?:"[^"]*?/poke\.sh"|\S+/poke\.sh) (?:' + "|".join(CATEGORIES) + r')$')
+def is_our_entry(e):
+    try:
+        if not isinstance(e, dict) or e.get("matcher") != "":
+            return False
+        hs = e.get("hooks")
+        return (isinstance(hs, list) and len(hs) == 1
+                and isinstance(hs[0], dict) and hs[0].get("type") == "command"
+                and isinstance(hs[0].get("command"), str)
+                and our_hook_re.match(hs[0]["command"]) is not None)
+    except Exception:
+        return False
+
 def add(event, category):
     entries = hooks.setdefault(event, [])
-    if any("peon-poke" in json.dumps(e) for e in entries):
+    if any(is_our_entry(e) for e in entries):
         return
     entries.append({"matcher": "", "hooks": [{"type": "command",
-        "command": f"bash {install_dir}/poke.sh {category}"}]})
+        "command": f'bash "{install_dir}/poke.sh" {category}'}]})
 add("Stop", "task.complete")
 add("Notification", "input.required")
 add("SessionStart", "session.start")
 # Stable original backup: never overwrite an existing .peon-poke-bak —
 # re-running setup must not replace the user's true rollback point with
-# an already-modified file. Delete the .bak to take a fresh one.
-if os.path.exists(path) and not os.path.exists(path + ".peon-poke-bak"):
+# an already-modified file. Delete the .bak to take a fresh one. A
+# symlinked .bak is never written through.
+if (os.path.exists(path) or os.path.islink(path)) \
+        and not os.path.exists(path + ".peon-poke-bak") \
+        and not os.path.islink(path + ".peon-poke-bak"):
     shutil.copy2(path, path + ".peon-poke-bak")
 with open(path, "w") as f:
     json.dump(cfg, f, indent=2)
@@ -166,7 +195,11 @@ table_re = re.compile(r"^\s*\[")
 notify_re = re.compile(r"^\s*notify\s*=")
 
 def is_our_notify(l):
-    return bool(notify_re.match(l)) and escaped_adapter in l
+    # Ownership must live in the assignment itself, never in a comment:
+    # strip comments before matching, or a foreign notify followed by a
+    # comment mentioning our adapter path would be hijacked as ours.
+    body = l.split("#", 1)[0]
+    return bool(notify_re.match(body)) and escaped_adapter in body
 
 def first_table_index(ls):
     return next((i for i, l in enumerate(ls) if table_re.match(l)), None)
@@ -277,7 +310,13 @@ fi
 # Recognized-as-ours: the setup marker, or the pre-marker pi header.
 install_owned_file() {
   local src="$1" dest="$2"
-  if [ -e "$dest" ]; then
+  if [ -e "$dest" ] || [ -L "$dest" ]; then
+    # Symlinks are never followed or replaced: writing through one would
+    # silently modify whatever it points at, which is not ours to touch.
+    if [ -L "$dest" ]; then
+      warn "$dest is a symlink — left untouched (remove it to let peon-poke manage this path)"
+      return 0
+    fi
     if [ ! -f "$dest" ]; then
       warn "$dest exists but is not a regular file — skipping"
       return 0
@@ -286,7 +325,7 @@ install_owned_file() {
       warn "$dest exists but is not recognized as ours — left untouched"
       return 0
     fi
-    if [ ! -f "$dest.peon-poke-bak" ] && ! cmp -s "$dest" "$src"; then
+    if [ ! -e "$dest.peon-poke-bak" ] && [ ! -L "$dest.peon-poke-bak" ] && ! cmp -s "$dest" "$src"; then
       cp "$dest" "$dest.peon-poke-bak"
       info "Existing file saved to $dest.peon-poke-bak (modified copy preserved)"
     fi
@@ -325,15 +364,24 @@ LAUNCHER
   chmod +x "$INSTALL_DIR/bin/peon-poke-uninstall"
   # Expose on PATH — but only via a dir that is already on PATH and
   # writable; we never create PATH entries or touch shell profiles.
+  # An existing entry is replaced ONLY when it is a symlink pointing
+  # exactly at our launcher: foreign files and symlinks to other
+  # commands are never clobbered.
+  want="$INSTALL_DIR/bin/peon-poke-uninstall"
   for d in "$HOME/.local/bin" "$HOME/bin" /usr/local/bin; do
     case ":$PATH:" in *":$d:"*) ;; *) continue ;; esac
     [ -d "$d" ] && [ -w "$d" ] || continue
-    if [ -e "$d/peon-poke-uninstall" ] && [ ! -L "$d/peon-poke-uninstall" ]; then
-      warn "$d/peon-poke-uninstall exists and is not ours — not replacing it"
-      continue
+    link="$d/peon-poke-uninstall"
+    if [ -e "$link" ] || [ -L "$link" ]; then
+      if [ -L "$link" ] && [ "$(readlink "$link" 2>/dev/null)" = "$want" ]; then
+        : # our own launcher — refresh it below
+      else
+        warn "$link exists and is not ours — not replacing it"
+        continue
+      fi
     fi
-    ln -sfn "$INSTALL_DIR/bin/peon-poke-uninstall" "$d/peon-poke-uninstall"
-    info "Uninstall command installed: $d/peon-poke-uninstall"
+    ln -sfn "$want" "$link"
+    info "Uninstall command installed: $link"
     break
   done
 fi

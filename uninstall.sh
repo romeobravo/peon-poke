@@ -91,7 +91,7 @@ safe_rm() {
 # --- Claude Code: drop our hook entries (backup + atomic rewrite) ---
 if [ -f "$HOME/.claude/settings.json" ] && command -v python3 >/dev/null; then
   if python3 - <<'PY'
-import json, os, shutil, sys, tempfile
+import json, os, re, shutil, sys, tempfile
 
 path = os.path.expanduser("~/.claude/settings.json")
 try:
@@ -102,9 +102,29 @@ except Exception:
     raise SystemExit(1)
 
 hooks = cfg.get("hooks", {})
+
+# Exact ownership: remove only entries that are precisely the hook shape
+# peon-poke-setup writes (any install dir, quoted or not). A user's own
+# hook that merely mentions "peon-poke" must survive.
+CATEGORIES = ("session.start", "task.complete", "task.error",
+              "task.acknowledge", "input.required")
+our_hook_re = re.compile(
+    r'^bash (?:"[^"]*?/poke\.sh"|\S+/poke\.sh) (?:' + "|".join(CATEGORIES) + r')$')
+def is_our_entry(e):
+    try:
+        if not isinstance(e, dict) or e.get("matcher") != "":
+            return False
+        hs = e.get("hooks")
+        return (isinstance(hs, list) and len(hs) == 1
+                and isinstance(hs[0], dict) and hs[0].get("type") == "command"
+                and isinstance(hs[0].get("command"), str)
+                and our_hook_re.match(hs[0]["command"]) is not None)
+    except Exception:
+        return False
+
 removed = 0
 for event, entries in list(hooks.items()):
-    kept = [e for e in entries if "peon-poke" not in json.dumps(e)]
+    kept = [e for e in entries if not is_our_entry(e)]
     removed += len(entries) - len(kept)
     if kept:
         hooks[event] = kept
@@ -141,11 +161,13 @@ default_escaped = json.dumps(os.path.expanduser("~/.peon-poke/adapters/codex.sh"
 
 def is_our_notify(line):
     # Structurally a `notify = [...]` assignment whose value points at a
-    # peon-poke codex adapter (current or default install dir).
+    # peon-poke codex adapter (current or default install dir). Ownership
+    # is decided on the comment-stripped body only — a foreign notify
+    # with a comment mentioning our adapter path is NOT ours.
     body = line.split("#", 1)[0]
     if not re.match(r"^\s*notify\s*=\s*\[", body):
         return False
-    return escaped in line or default_escaped in line
+    return escaped in body or default_escaped in body
 
 lines = open(path).readlines()
 out, i, removed = [], 0, False
@@ -194,12 +216,19 @@ PY
 fi
 
 # --- pi / omp extensions + opencode plugin (only files we own) ---
+# If setup preserved a user-customized copy in .peon-poke-bak, uninstall
+# restores the user's version instead of deleting it — their edits are
+# theirs, not ours to destroy.
 for f in "$HOME/.pi/agent/extensions/peon-poke.ts" \
          "$HOME/.omp/agent/extensions/peon-poke.ts" \
          "${XDG_CONFIG_HOME:-$HOME/.config}/opencode/plugin/peon-poke.ts"; do
   if [ -f "$f" ]; then
     if head -n 8 "$f" | grep -q 'peon-poke-setup\|pi (and oh-my-pi) extension'; then
-      rm -f "$f" "$f.peon-poke-bak" && info "Removed $f"
+      if [ -f "$f.peon-poke-bak" ]; then
+        mv -f "$f.peon-poke-bak" "$f" && info "Restored user-modified $f (from .peon-poke-bak)"
+      else
+        rm -f "$f" && info "Removed $f"
+      fi
     else
       warn "$f is not recognized as ours — left untouched"
     fi

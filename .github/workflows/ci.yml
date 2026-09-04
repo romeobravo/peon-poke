@@ -1,0 +1,38 @@
+# CI — build warning-free, keep the shell glue parseable, run the full
+# suite, and keep SHA256SUMS honest (a PR that edits a fetched runtime
+# file without regenerating the manifest fails here, before it can ship
+# in a release that the curl installer hard-requires it at).
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Syntax-check shell scripts
+        run: |
+          bash -n peon-poke-setup uninstall.sh poke.sh install.sh install-remote.sh
+          for f in scripts/*.sh adapters/*.sh tests/*.sh; do bash -n "$f"; done
+
+      - name: Build (must stay warning-free)
+        run: |
+          make 2>&1 | tee /tmp/build.log
+          if grep -qi 'warning' /tmp/build.log; then
+            echo "::error::compiler warnings — the build must stay warning-free"
+            exit 1
+          fi
+
+      - name: Test suite
+        run: bash tests/run-all.sh
+
+      - name: SHA256SUMS matches the tree
+        run: shasum -a 256 -c SHA256SUMS

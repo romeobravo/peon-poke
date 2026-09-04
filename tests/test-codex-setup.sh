@@ -16,7 +16,17 @@ H="$TMP/home"
 ok()   { PASS=$((PASS+1)); echo "ok   - $1"; }
 bad()  { FAIL=$((FAIL+1)); echo "FAIL - $1"; }
 
-run_setup() { env HOME="$H" bash "$REPO/peon-poke-setup" >>"$TMP/setup.log" 2>&1; }
+# Isolation: setup exposes the uninstall command via the first writable
+# dir of ~/.local/bin, ~/bin, /usr/local/bin that is on PATH (first
+# match wins). Prepending a fake ~/.local/bin makes it the winner and
+# leaves the real /usr/local/bin unreachable — while keeping the rest of
+# PATH intact so setup's python/tomllib discovery still works. (An
+# earlier suite version briefly replaced the real global
+# peon-poke-uninstall symlink during a run.)
+run_setup() {
+  mkdir -p "$H/.local/bin"
+  env HOME="$H" PATH="$H/.local/bin:$PATH" bash "$REPO/peon-poke-setup" >>"$TMP/setup.log" 2>&1
+}
 
 # a python with tomllib if any exists (python3 may be < 3.11 on macOS)
 TOML_PY=""
@@ -129,8 +139,8 @@ ls "$H/.codex/" | grep -q '^\.config\.toml\.' \
 
 # -------------------------------------------------- quoted/spacey paths ---
 WEIRD="$TMP/home with space and \"quote\""
-rm -rf "$WEIRD"; mkdir -p "$WEIRD/.codex"
-env HOME="$WEIRD" bash "$REPO/peon-poke-setup" >>"$TMP/setup.log" 2>&1
+rm -rf "$WEIRD"; mkdir -p "$WEIRD/.codex" "$WEIRD/.local/bin"
+env HOME="$WEIRD" PATH="$WEIRD/.local/bin:$PATH" bash "$REPO/peon-poke-setup" >>"$TMP/setup.log" 2>&1
 CFG="$WEIRD/.codex/config.toml"
 if [ -n "$TOML_PY" ]; then
   "$TOML_PY" - "$CFG" "$WEIRD" > "$TMP/weird.out" <<'PY'
@@ -193,6 +203,22 @@ grep -q 'my_notifier' "$H/.codex/config.toml" \
   && ok "migration: user notifier survived the heal" || bad "migration: user notifier lost"
 grep -q 'peon-poke/adapters/codex.sh' "$H/.codex/config.toml" \
   && bad "migration: our stray duplicate remains" || ok "migration: our stray duplicate removed"
+
+# --------------------------------------- comment-spoofed foreign notify ---
+# Ownership must be decided on the comment-stripped assignment: a
+# foreign notify followed by a comment mentioning our adapter path is
+# the USER's notify and must be preserved, not hijacked as ours.
+cat > "$TMP/initial.toml" <<EOF
+notify = ["/usr/bin/true"] # $H/.peon-poke/adapters/codex.sh
+model = "gpt-5"
+EOF
+scenario; run_setup
+grep -q '/usr/bin/true' "$H/.codex/config.toml" \
+  && ok "comment-spoofed foreign notify preserved by setup" \
+  || bad "setup hijacked a comment-spoofed foreign notify"
+cmp -s "$TMP/initial.toml" "$H/.codex/config.toml" \
+  && ok "comment-spoofed foreign notify byte-identical after setup" \
+  || bad "setup rewrote the comment-spoofed notify config"
 
 echo "----"
 echo "setup: $PASS passed, $FAIL failed"

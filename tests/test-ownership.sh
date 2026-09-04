@@ -19,7 +19,11 @@ H="$TMP/home"
 ok()  { PASS=$((PASS+1)); echo "ok   - $1"; }
 bad() { FAIL=$((FAIL+1)); echo "FAIL - $1"; }
 
-run_setup()    { env HOME="$H" bash "$REPO/peon-poke-setup" >>"$TMP/setup.log" 2>&1; }
+# A fake ~/.local/bin is PREPENDED to PATH: setup's uninstall-command
+# loop takes the first writable on-PATH dir, so the fake one wins and
+# the real /usr/local/bin is never reached — the rest of PATH (python
+# discovery) stays intact.
+run_setup()    { mkdir -p "$H/.local/bin"; env HOME="$H" PATH="$H/.local/bin:$PATH" bash "$REPO/peon-poke-setup" >>"$TMP/setup.log" 2>&1; }
 run_uninstall(){ env HOME="$H" POKE_DIR="$H/.peon-poke" bash "$REPO/uninstall.sh" "$@" >>"$TMP/uninstall.log" 2>&1; }
 fresh() { rm -rf "$H"; mkdir -p "$H/.codex" "$H/.pi/agent/extensions" "$H/.config/opencode"; }
 
@@ -100,6 +104,87 @@ grep -q 'notify' "$H/.codex/config.toml.peon-poke-bak" \
 cmp -s <(printf 'model = "gpt-5"\n') "$H/.codex/config.toml" \
   && ok "uninstall: codex config restored to original content" || bad "uninstall: codex config not restored"
 
+# ------------------------------------------- symlinked settings.json ---
+# Writing through a symlink would silently modify its target — refuse.
+fresh
+mkdir -p "$H/.claude" "$H/elsewhere"
+printf '{"model": "opus"}\n' > "$H/elsewhere/real-settings.json"
+ln -s "$H/elsewhere/real-settings.json" "$H/.claude/settings.json"
+run_setup
+[ -L "$H/.claude/settings.json" ] \
+  && ok "setup: symlinked settings.json not replaced" || bad "setup: replaced symlinked settings.json"
+cmp -s <(printf '{"model": "opus"}\n') "$H/elsewhere/real-settings.json" \
+  && ok "setup: settings.json symlink target untouched" || bad "setup: wrote through settings.json symlink"
+
+# --------------------------------------------- symlinked extension file ---
+fresh
+mkdir -p "$H/.pi/agent/extensions" "$H/elsewhere"
+printf '// foreign target\n' > "$H/elsewhere/target.ts"
+ln -s "$H/elsewhere/target.ts" "$H/.pi/agent/extensions/peon-poke.ts"
+run_setup
+[ -L "$H/.pi/agent/extensions/peon-poke.ts" ] \
+  && ok "setup: symlinked extension left as a symlink" || bad "setup: replaced symlinked extension"
+cmp -s <(printf '// foreign target\n') "$H/elsewhere/target.ts" \
+  && ok "setup: extension symlink target untouched" || bad "setup: wrote through extension symlink"
+
+# --------------------------------- uninstall-command symlink ownership ---
+# setup must never replace a foreign peon-poke-uninstall symlink, but
+# must (re)create its own.
+fresh; run_setup
+[ -L "$H/.local/bin/peon-poke-uninstall" ] \
+  && [ "$(readlink "$H/.local/bin/peon-poke-uninstall")" = "$H/.peon-poke/bin/peon-poke-uninstall" ] \
+  && ok "setup: uninstall command symlink points at our launcher" \
+  || bad "setup: launcher symlink missing or points elsewhere"
+rm -f "$H/.local/bin/peon-poke-uninstall"
+ln -s "$H/bin/elsewhere-uninstall" "$H/.local/bin/peon-poke-uninstall"
+run_setup
+[ "$(readlink "$H/.local/bin/peon-poke-uninstall")" = "$H/bin/elsewhere-uninstall" ] \
+  && ok "setup: foreign uninstall symlink not replaced" || bad "setup: replaced foreign uninstall symlink"
+
+# --------------------- user hook mentioning peon-poke: exact ownership ---
+# Registration skips only entries that are EXACTLY ours; a user's own
+# hook that merely mentions peon-poke must survive setup and uninstall.
+fresh
+mkdir -p "$H/.claude"
+cat > "$H/.claude/settings.json" <<EOF
+{"hooks": {"Stop": [
+  {"matcher": "", "hooks": [{"type": "command", "command": "bash $H/tools/my-peon-poke-wrapper.sh"}]}
+]}}
+EOF
+run_setup
+grep -q 'my-peon-poke-wrapper.sh' "$H/.claude/settings.json" \
+  && ok "setup: user's peon-poke-mentioning hook preserved" || bad "setup: dropped user's peon-poke hook"
+grep -Fq 'poke.sh\" task.complete' "$H/.claude/settings.json" \
+  && ok "setup: our hook registered alongside the user's" || bad "setup: our hook not registered (skipped by loose match?)"
+run_uninstall
+grep -q 'my-peon-poke-wrapper.sh' "$H/.claude/settings.json" \
+  && ok "uninstall: user's peon-poke-mentioning hook preserved" || bad "uninstall: deleted user's peon-poke hook"
+grep -Fq 'poke.sh\" task.complete' "$H/.claude/settings.json" \
+  && bad "uninstall: our hook left behind" || ok "uninstall: our hook removed"
+
+# ------------------- user-modified extension restored on uninstall ---
+# setup saved a .peon-poke-bak of the user's customized copy — uninstall
+# restores their version instead of destroying both.
+fresh
+cat > "$H/.pi/agent/extensions/peon-poke.ts" <<'EOF'
+/**
+ * peon-poke — pi (and oh-my-pi) extension
+ * (user-tweaked copy)
+ */
+export default function (pi: { on: (e: string, f: () => void) => void }) {
+  pi.on("agent_settled", () => console.log("MINE"))
+}
+EOF
+run_setup
+grep -q MINE "$H/.pi/agent/extensions/peon-poke.ts.peon-poke-bak" \
+  && ok "setup: user customization saved to .peon-poke-bak" || bad "setup: user customization not backed up"
+run_uninstall
+grep -q MINE "$H/.pi/agent/extensions/peon-poke.ts" \
+  && ok "uninstall: user-modified extension restored from .peon-poke-bak" \
+  || bad "uninstall: user customization lost"
+[ ! -e "$H/.pi/agent/extensions/peon-poke.ts.peon-poke-bak" ] \
+  && ok "uninstall: restore consumed the .peon-poke-bak" || bad "uninstall: stale .peon-poke-bak left behind"
+
 # ------------------------------------------------- opencode plugin -------
 # foreign plugin file must survive setup AND uninstall
 fresh
@@ -135,8 +220,8 @@ grep -q "OpenCode not detected" "$TMP/setup.log" \
   && ok "setup: opencode skipped when not installed" || bad "setup: opencode not skipped when absent"
 
 # XDG_CONFIG_HOME honored
-fresh; rm -rf "$H/.config/opencode"; mkdir -p "$H/xdg/opencode"
-env HOME="$H" XDG_CONFIG_HOME="$H/xdg" bash "$REPO/peon-poke-setup" >>"$TMP/setup.log" 2>&1
+fresh; rm -rf "$H/.config/opencode"; mkdir -p "$H/xdg/opencode" "$H/.local/bin"
+env HOME="$H" XDG_CONFIG_HOME="$H/xdg" PATH="$H/.local/bin:$PATH" bash "$REPO/peon-poke-setup" >>"$TMP/setup.log" 2>&1
 [ -f "$H/xdg/opencode/plugin/peon-poke.ts" ] \
   && ok "setup: XDG_CONFIG_HOME honored for opencode plugin" || bad "XDG_CONFIG_HOME not honored"
 

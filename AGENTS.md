@@ -29,7 +29,9 @@ These bit us once; don't relearn them:
 - `poke.sh` fires detached, quiet, and never blocks the calling agent.
 - `peon-poke-setup` never clobbers `~/.claude/settings.json`: on parse failure it skips Claude registration and leaves the file byte-identical; otherwise it writes `settings.json.peon-poke-bak` before modifying. `config.json` is only created if missing, never overwritten.
 - The uninstaller's `safe_rm` deletes a directory **only** when it contains a valid ownership marker (`.peon-poke-install` for the runtime dir, `.peon-poke-config` for the config dir — each validator rejects the other kind) with a well-formed random install identity. Path shape, basename, and install-looking contents must never authorize deletion. If you change the marker format, change `peon-poke-setup` and `uninstall.sh` in the same commit — they ship together.
-- `install-remote.sh` verifies every fetched file against `SHA256SUMS` **before executing anything**, and hard-fails if the manifest is missing at the install base. The manifest also drives the fetch list — it must include `uninstall.sh` (setup copies it into `~/.peon-poke/` and installs the `peon-poke-uninstall` command) and the universal dist binary.
+- `install-remote.sh` verifies every fetched file against `SHA256SUMS` **before executing anything**, and hard-fails if the manifest is missing at the install base. The manifest also drives the fetch list — it must include `uninstall.sh` (setup copies it into `~/.peon-poke/` and installs the `peon-poke-uninstall` command) and the universal dist binary. Every manifest entry must pass `valid_payload_path`: no absolute paths, `.`/`..` components, backslashes, odd characters, or top-level names outside the hard-coded payload set (`install.sh`, `peon-poke-setup`, `uninstall.sh`, `poke.sh`, `config.json`, `dist/`, `plugins/`, `adapters/`). Adding a new top-level fetched file means updating that allowlist **and** `scripts/sha256sums.sh` in the same commit.
+- `peon-poke-setup` never writes through symlinks: `~/.claude/settings.json`, installed extension/plugin files, and existing `peon-poke-uninstall` PATH entries that are symlinks are left untouched (the launcher symlink is only ever refreshed when it points exactly at our own target). Claude hook ownership is exact — the precise `bash "…/poke.sh" <category>` shape — so a user's own hook that merely mentions peon-poke survives both setup and uninstall.
+- `uninstall.sh` restores a user-customized extension from its `.peon-poke-bak` instead of deleting it — their edits are theirs.
 
 ## Build & smoke test
 
@@ -44,9 +46,14 @@ make                 # clang -O2 -Wall — must stay warning-free
 
 `tests/run-all.sh` covers the Codex adapter dispatch matrix, the TOML-aware
 setup fixtures (empty / table-ending / existing-notify / malformed /
-quoted-path configs), and the uninstaller's destructive-safety guards —
-all against isolated fake HOMEs. Run it before any release and after any
-change to `adapters/`, `peon-poke-setup`, or `uninstall.sh`:
+quoted-path configs), the uninstaller's destructive-safety guards —
+all against isolated fake HOMEs — plus the installer's manifest
+traversal guards (`test-install-remote.sh`, over a `file://` base) and
+symlink/ownership hardening. Tests that invoke `peon-poke-setup` must
+prepend a fake `~/.local/bin` to `PATH` (never replace PATH — python
+discovery must keep working) so the uninstall-command loop can never
+reach the real `/usr/local/bin`. Run it before any release and after any
+change to `adapters/`, `peon-poke-setup`, `uninstall.sh`, or `install-remote.sh`:
 
 ```
 bash tests/run-all.sh
@@ -76,6 +83,6 @@ scripts/sha256sums.sh
 scripts/release.sh <X.Y.Z> ["commit message"]
 ```
 
-Full flow: preflight checks → rebuild → refresh `dist/` → regenerate `SHA256SUMS` → bump `VERSION` → commit → tag `vX.Y.Z` → push main + tag → `gh release create` → bump the Homebrew tap (`scripts/brew-bump.sh`).
+Full flow: preflight checks (clean worktree, local `main` == `origin/main`, tag not taken) → rebuild → refresh `dist/` → regenerate `SHA256SUMS` → bump `VERSION` → stage exactly `VERSION SHA256SUMS dist/poke-darwin-universal` (never `git add -A`) → commit → tag `vX.Y.Z` → push main + tag → `gh release create` → bump the Homebrew tap (`scripts/brew-bump.sh`).
 
 **Ordering matters:** the remote installer resolves the latest GitHub release and hard-requires `SHA256SUMS` at that tag. Never push installer/runtime changes to `main` without cutting the release in the same session — remote installs fail until the tag exists.
