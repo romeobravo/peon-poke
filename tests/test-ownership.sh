@@ -128,18 +128,26 @@ cmp -s <(printf '// foreign target\n') "$H/elsewhere/target.ts" \
   && ok "setup: extension symlink target untouched" || bad "setup: wrote through extension symlink"
 
 # --------------------------------- uninstall-command symlink ownership ---
-# setup must never replace a foreign peon-poke-uninstall symlink, but
-# must (re)create its own.
+# setup must never replace a foreign symlink, but must (re)create its own.
+# Both command names (peon-poke, peon-poke-uninstall) point at the one CLI
+# file; the uninstall subcommand is chosen by argv[0].
 fresh; run_setup
 [ -L "$H/.local/bin/peon-poke-uninstall" ] \
-  && [ "$(readlink "$H/.local/bin/peon-poke-uninstall")" = "$H/.peon-poke/bin/peon-poke-uninstall" ] \
-  && ok "setup: uninstall command symlink points at our launcher" \
-  || bad "setup: launcher symlink missing or points elsewhere"
-rm -f "$H/.local/bin/peon-poke-uninstall"
+  && [ "$(readlink "$H/.local/bin/peon-poke-uninstall")" = "$H/.peon-poke/bin/peon-poke" ] \
+  && ok "setup: uninstall command symlink points at the CLI" \
+  || bad "setup: uninstall symlink missing or points elsewhere"
+[ -L "$H/.local/bin/peon-poke" ] \
+  && [ "$(readlink "$H/.local/bin/peon-poke")" = "$H/.peon-poke/bin/peon-poke" ] \
+  && ok "setup: peon-poke command symlink points at the CLI" \
+  || bad "setup: peon-poke symlink missing or points elsewhere"
+rm -f "$H/.local/bin/peon-poke-uninstall" "$H/.local/bin/peon-poke"
 ln -s "$H/bin/elsewhere-uninstall" "$H/.local/bin/peon-poke-uninstall"
+ln -s "$H/bin/elsewhere" "$H/.local/bin/peon-poke"
 run_setup
 [ "$(readlink "$H/.local/bin/peon-poke-uninstall")" = "$H/bin/elsewhere-uninstall" ] \
   && ok "setup: foreign uninstall symlink not replaced" || bad "setup: replaced foreign uninstall symlink"
+[ "$(readlink "$H/.local/bin/peon-poke")" = "$H/bin/elsewhere" ] \
+  && ok "setup: foreign peon-poke symlink not replaced" || bad "setup: replaced foreign peon-poke symlink"
 
 # --------------------- user hook mentioning peon-poke: exact ownership ---
 # Registration skips only entries that are EXACTLY ours; a user's own
@@ -154,12 +162,12 @@ EOF
 run_setup
 grep -q 'my-peon-poke-wrapper.sh' "$H/.claude/settings.json" \
   && ok "setup: user's peon-poke-mentioning hook preserved" || bad "setup: dropped user's peon-poke hook"
-grep -Fq 'poke.sh\" task.complete' "$H/.claude/settings.json" \
+grep -Fq 'peon-poke dispatch task.complete' "$H/.claude/settings.json" \
   && ok "setup: our hook registered alongside the user's" || bad "setup: our hook not registered (skipped by loose match?)"
 run_uninstall
 grep -q 'my-peon-poke-wrapper.sh' "$H/.claude/settings.json" \
   && ok "uninstall: user's peon-poke-mentioning hook preserved" || bad "uninstall: deleted user's peon-poke hook"
-grep -Fq 'poke.sh\" task.complete' "$H/.claude/settings.json" \
+grep -Fq 'peon-poke dispatch task.complete' "$H/.claude/settings.json" \
   && bad "uninstall: our hook left behind" || ok "uninstall: our hook removed"
 
 # ------------------- user-modified extension restored on uninstall ---

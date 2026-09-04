@@ -5,7 +5,7 @@
  * Auto-discovered from ~/.config/opencode/plugin/ (no config edits
  * needed). opencode scans both plugin/ and plugins/ — verified against
  * 1.18.27 — so the singular dir stays supported.
- * Routes through poke.sh so pattern config stays centralized in
+ * Routes through the peon-poke CLI so pattern config stays centralized in
  * ~/.config/peon-poke/config.json.
  *
  * Event contract verified against @opencode-ai/sdk 1.18 (Event union):
@@ -23,7 +23,7 @@ const DIR = process.env.POKE_DIR ?? join(homedir(), ".peon-poke");
 
 function fire(category: string) {
   try {
-    const child = spawn("bash", [join(DIR, "poke.sh"), category], {
+    const child = spawn(join(DIR, "bin/peon-poke"), ["dispatch", category], {
       detached: true,
       stdio: "ignore",
     });

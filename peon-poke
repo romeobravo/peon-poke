@@ -1,0 +1,1136 @@
+#!/usr/bin/env python3
+# peon-poke — control-plane CLI: event dispatch, integrations setup/uninstall,
+# and diagnostics. The haptic core stays the C binary (bin/poke); this file
+# owns everything the bash scripts used to do.
+#
+# Subcommands:
+#   peon-poke dispatch <category|pattern>   map an agent event to a haptic pattern
+#   peon-poke play <pattern>               fire a pattern now (alias of dispatch)
+#   peon-poke codex|gemini|cursor|grok     agent event adapters (argv/stdin JSON)
+#   peon-poke setup                        install runtime + register hooks
+#   peon-poke uninstall [--purge]          remove registrations + installed files
+#   peon-poke doctor                       installation/config health report
+#
+# Environment (unchanged from the bash era):
+#   POKE_DIR       install dir            (default ~/.peon-poke)
+#   POKE_BIN       haptic binary override (default $POKE_DIR/bin/poke)
+#   POKE_CONFIG    config override        (default XDG or ~/.peon-poke fallback)
+#   PEON_POKE_SRC  setup source dir       (default: dir of this file)
+#   POKE_QUIET / POKE_PATTERN             consumed by bin/poke itself
+#
+# Python 3.8+, stdlib only. tomllib (3.11+) is used opportunistically to
+# parse-validate TOML edits; without it the well-tested structural editor
+# still applies. Dispatch paths ALWAYS exit 0 — a hook must never fail or
+# block the host agent.
+import argparse
+import contextlib
+import json
+import os
+import re
+import shlex
+import shutil
+import subprocess
+import sys
+import tempfile
+import uuid
+
+CATEGORIES = ("session.start", "task.acknowledge", "task.complete",
+              "task.error", "input.required")
+
+UUID_RE = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-'
+                     r'[0-9a-f]{4}-[0-9a-f]{12}$')
+
+try:
+    import tomllib  # Python 3.11+
+except ImportError:
+    tomllib = None
+
+
+# ---------------------------------------------------------------- paths ---
+
+def install_dir():
+    return os.environ.get("POKE_DIR") or os.path.expanduser("~/.peon-poke")
+
+
+def config_dir():
+    xdg = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
+    return os.path.join(xdg, "peon-poke")
+
+
+def config_path():
+    if os.environ.get("POKE_CONFIG"):
+        return os.environ["POKE_CONFIG"]
+    p = os.path.join(config_dir(), "config.json")
+    if os.path.isfile(p):
+        return p
+    return os.path.join(install_dir(), "config.json")
+
+
+def poke_bin():
+    return os.environ.get("POKE_BIN") or os.path.join(install_dir(), "bin", "poke")
+
+
+def self_path():
+    return os.path.realpath(__file__)
+
+
+def src_dir():
+    return os.environ.get("PEON_POKE_SRC") or os.path.dirname(self_path())
+
+
+BOLD, GREEN, YELLOW, RESET = "\033[1m", "\033[32m", "\033[33m", "\033[0m"
+
+
+def info(msg):
+    print("%s>%s %s" % (GREEN, RESET, msg))
+
+
+def warn(msg):
+    print("%s!%s %s" % (YELLOW, RESET, msg))
+
+
+def plain_info(msg):
+    print("> %s" % msg)
+
+
+def plain_warn(msg):
+    print("! %s" % msg, file=sys.stderr)
+
+
+# ------------------------------------------------------------- dispatch ---
+
+def load_config():
+    try:
+        with open(config_path()) as f:
+            cfg = json.load(f)
+        return cfg if isinstance(cfg, dict) else None
+    except Exception:
+        return None
+
+
+def resolve_token(cfg, token):
+    """Resolve a category/pattern token against the config.
+
+    Returns (pattern, strength) or None when nothing should fire.
+    - category mode (token in categories/patterns): gated by categories map
+    - pattern mode (anything else): explicit name or raw gap list, ungated
+    custom names override built-in names in both modes.
+    """
+    if not cfg.get("enabled", True):
+        return None
+    custom = cfg.get("custom") or {}
+    if token in cfg.get("categories", {}) or token in cfg.get("patterns", {}):
+        if not cfg.get("categories", {}).get(token, False):
+            return None
+        pat = cfg.get("patterns", {}).get(token, "")
+        pat = custom.get(pat, pat)
+    else:
+        pat = custom.get(token, token)
+    if not pat:
+        return None
+    return pat, cfg.get("strength", 6)
+
+
+def fire(pattern, strength):
+    """Spawn the haptic binary detached and quiet. Never raises."""
+    env = dict(os.environ, POKE_QUIET="1", POKE_PATTERN=str(strength))
+    try:
+        subprocess.Popen(
+            [poke_bin(), pattern],
+            env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except Exception:
+        pass  # a missed poke must never fail the host agent
+
+
+def dispatch_token(token):
+    if not token:
+        return
+    cfg = load_config()
+    if cfg is None:
+        return
+    resolved = resolve_token(cfg, token)
+    if resolved:
+        fire(*resolved)
+
+
+def cmd_dispatch(args):
+    dispatch_token(getattr(args, "token", None))
+    return 0
+
+
+# ------------------------------------------------------- event adapters ---
+# Codex invokes its `notify` program with ONE argument: a JSON object whose
+# "type" field names the event. Hook-style callers pass JSON on stdin with a
+# "hook_event_name" field; Grok uses camelCase "hookEventName". Very old
+# Codex builds passed the bare event name as argv. Case and -/_ separators
+# are squashed so all spellings match.
+
+def normalize_event(raw):
+    try:
+        obj = json.loads(raw)
+        if isinstance(obj, dict):
+            raw = (obj.get("type") or obj.get("hook_event_name")
+                   or obj.get("hookEventName") or "")
+    except Exception:
+        pass
+    return re.sub(r"[-_]", "", str(raw).strip().lower())
+
+
+CODEX_EVENTS = {
+    "agentturncomplete": "task.complete", "stop": "task.complete",
+    "turnend": "task.complete",
+    "error": "task.error",
+    "permission": "input.required", "approvalrequired": "input.required",
+    "sessionstart": "session.start", "sessionconfigured": "session.start",
+}
+GEMINI_EVENTS = {
+    "stop": "task.complete", "turncomplete": "task.complete",
+    "error": "task.error",
+    "notification": "input.required",
+    "sessionstart": "session.start",
+}
+CURSOR_EVENTS = {
+    "stop": "task.complete",
+    "beforesubmitprompt": "task.acknowledge", "beforeshellexecution": "task.acknowledge",
+    # beforeReadFile / beforeMCPExecution / afterFileEdit: too noisy — silent
+}
+GROK_EVENTS = {
+    "stop": "task.complete",
+    "error": "task.error",
+    "notification": "input.required",
+    "sessionstart": "session.start",
+}
+
+
+def run_event_adapter(table, argv_event, read_stdin):
+    raw = argv_event or ""
+    if not raw and read_stdin and not sys.stdin.isatty():
+        try:
+            raw = sys.stdin.read()
+        except Exception:
+            pass
+    category = table.get(normalize_event(raw))
+    if category:
+        dispatch_token(category)
+    return 0
+
+
+def cmd_codex(args):
+    return run_event_adapter(CODEX_EVENTS, getattr(args, "event", None), True)
+
+
+def cmd_gemini(args):
+    return run_event_adapter(GEMINI_EVENTS, getattr(args, "event", None), False)
+
+
+def cmd_cursor(args):
+    return run_event_adapter(CURSOR_EVENTS, getattr(args, "event", None), False)
+
+
+def cmd_grok(args):
+    return run_event_adapter(GROK_EVENTS, getattr(args, "event", None), True)
+
+
+# -------------------------------------------------------- shared fs glue ---
+
+def atomic_write(path, content):
+    """Write bytes/str atomically (temp file in the same dir + os.replace)."""
+    data = content.encode() if isinstance(content, str) else content
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path) or ".",
+                               prefix="." + os.path.basename(path) + ".")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    finally:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(tmp)
+
+
+def stable_backup(path):
+    """One stable .peon-poke-bak of the ORIGINAL file: never overwritten on
+    re-runs (the user's true rollback point), never written through a
+    symlink. Delete the .bak to take a fresh one."""
+    bak = path + ".peon-poke-bak"
+    if (os.path.exists(path) or os.path.islink(path)) \
+            and not os.path.exists(bak) and not os.path.islink(bak):
+        shutil.copy2(path, bak)
+        return True
+    return False
+
+
+def first_bytes_contains(path, needle, lines=8):
+    try:
+        with open(path, errors="replace") as f:
+            head = "".join(f.readline() for _ in range(lines))
+    except OSError:
+        return False
+    return needle in head
+
+
+def marker_ok(path, kind):
+    """The ONLY authorization for destructive removal: a marker file written
+    by setup for exactly this directory kind, carrying a well-formed random
+    install identity. Name/shape/contents of the directory never authorize
+    anything."""
+    if not (os.path.isfile(path) and os.access(path, os.R_OK)):
+        return False
+    app_ok = kind_ok = False
+    ident = ""
+    try:
+        with open(path) as f:
+            for line in f:
+                line = line.rstrip("\n")
+                if line == "app=peon-poke":
+                    app_ok = True
+                elif line == "kind=%s" % kind:
+                    kind_ok = True
+                elif line.startswith("install_id="):
+                    ident = line[len("install_id="):]
+    except OSError:
+        return False
+    return app_ok and kind_ok and bool(UUID_RE.match(ident))
+
+
+def stamp_marker(directory, name, kind, version):
+    """Write (or refresh, keeping any existing valid identity) the ownership
+    marker for one managed directory. The identity is stable across re-runs
+    so upgrades keep proving ownership."""
+    os.makedirs(directory, exist_ok=True)
+    path = os.path.join(directory, name)
+    existing = ""
+    if os.path.isfile(path):
+        try:
+            with open(path) as f:
+                for line in f:
+                    if line.startswith("install_id="):
+                        existing = line[len("install_id="):].strip()
+                        break
+        except OSError:
+            pass
+    ident = existing if UUID_RE.match(existing or "") else str(uuid.uuid4())
+    atomic_write(path, "app=peon-poke\nkind=%s\ninstall_id=%s\nversion=%s\n"
+                % (kind, ident, version))
+
+
+# --------------------------------------------------------- Claude hooks ---
+# Exact ownership: an entry is ours only if it is precisely the hook shape
+# this setup writes — the legacy bash/poke.sh shape registered by <= 0.6.x,
+# or the current CLI shape. A user's own hook that merely mentions
+# "peon-poke" must be neither skipped on registration nor deleted on
+# uninstall.
+
+CLAUDE_EVENTS = (("Stop", "task.complete"),
+                 ("Notification", "input.required"),
+                 ("SessionStart", "session.start"))
+
+
+def claude_hook_patterns():
+    cats = "|".join(re.escape(c) for c in CATEGORIES)
+    legacy = re.compile(r'^bash (?:"[^"]*?/poke\.sh"|\S+/poke\.sh) (?:%s)$' % cats)
+    current = re.compile(r'^(?:"[^"]*?/bin/peon-poke"|\S+/bin/peon-poke)'
+                         r' dispatch (?:%s)$' % cats)
+    return legacy, current
+
+
+def is_our_hook_entry(entry, patterns):
+    try:
+        if not isinstance(entry, dict) or entry.get("matcher") != "":
+            return False
+        hs = entry.get("hooks")
+        if not (isinstance(hs, list) and len(hs) == 1 and isinstance(hs[0], dict)):
+            return False
+        if hs[0].get("type") != "command":
+            return False
+        cmd = hs[0].get("command")
+        return isinstance(cmd, str) and any(p.match(cmd) for p in patterns)
+    except Exception:
+        return False
+
+
+def claude_settings_path():
+    return os.path.expanduser("~/.claude/settings.json")
+
+
+def register_claude(install):
+    """Register our hooks, healing legacy-shape entries. Returns True on
+    success; on any structural problem the file is left byte-identical."""
+    path = claude_settings_path()
+    if os.path.islink(path):
+        # Never write through a symlink: it would silently modify whatever
+        # the user pointed it at, which is not ours to touch.
+        warn("%s is a symlink — file left untouched" % path)
+        return False
+    cfg = {}
+    if os.path.exists(path):
+        try:
+            with open(path) as f:
+                cfg = json.load(f)
+        except Exception as e:
+            warn("cannot parse %s (%s) — file left untouched" % (path, e))
+            return False
+        if not isinstance(cfg, dict):
+            warn("%s: top level is not a JSON object — file left untouched" % path)
+            return False
+    hooks = cfg.setdefault("hooks", {})
+    if not isinstance(hooks, dict):
+        warn("%s: 'hooks' is not an object — file left untouched" % path)
+        return False
+
+    legacy, current = claude_hook_patterns()
+    cli = os.path.join(install, "bin", "peon-poke")
+    changed = False
+    for event, category in CLAUDE_EVENTS:
+        entries = hooks.get(event)
+        if not isinstance(entries, list):
+            entries = []
+        kept = [e for e in entries
+                if not is_our_hook_entry(e, (legacy, current))]
+        final = kept + [{"matcher": "", "hooks": [{"type": "command",
+                     "command": shlex.join([cli, "dispatch", category])}]}]
+        if final != entries:
+            hooks[event] = final
+            changed = True
+
+    if not changed and os.path.exists(path):
+        return True  # already in the desired state — no churn, no backup
+    if os.path.exists(path):
+        stable_backup(path)
+    atomic_write(path, json.dumps(cfg, indent=2) + "\n")
+    return True
+
+
+def unregister_claude():
+    """Remove exactly our hook entries (legacy + current shapes). Returns
+    0 removed, >0 removed (file rewritten), or -1 when untouched on error."""
+    path = claude_settings_path()
+    if not os.path.isfile(path):
+        return 0
+    try:
+        with open(path) as f:
+            cfg = json.load(f)
+    except Exception:
+        plain_warn("peon-poke: cannot parse %s — left untouched" % path)
+        return -1
+    if not isinstance(cfg, dict):
+        plain_warn("peon-poke: %s: not a JSON object — left untouched" % path)
+        return -1
+    hooks = cfg.get("hooks")
+    if not isinstance(hooks, dict):
+        return 0
+    legacy, current = claude_hook_patterns()
+    removed = 0
+    for event, entries in list(hooks.items()):
+        if not isinstance(entries, list):
+            continue
+        kept = [e for e in entries if not is_our_hook_entry(e, (legacy, current))]
+        removed += len(entries) - len(kept)
+        if kept:
+            hooks[event] = kept
+        else:
+            del hooks[event]
+    if not removed:
+        return 0
+    stable_backup(path)
+    atomic_write(path, json.dumps(cfg, indent=2) + "\n")
+    return removed
+
+
+# ----------------------------------------------------------- Codex TOML ---
+# Surgical line editor for ~/.codex/config.toml: we own a notify assignment
+# only when its comment-stripped body is structurally `notify = [...]` AND
+# its value points at one of our paths (current CLI shape or the legacy
+# adapters/codex.sh shape, current or default install dir). A user's own
+# top-level notify always wins; legacy mis-scoped/duplicate registrations
+# are healed; edits are parse-validated when tomllib is available.
+
+CODEX_MARKER = "# peon-poke (managed — remove to uninstall)"
+
+
+def codex_toml_path():
+    return os.path.expanduser("~/.codex/config.toml")
+
+
+def codex_owned_escapes(install=None):
+    """JSON-escaped (TOML-basic-string-compatible) paths whose presence in a
+    notify body marks the line as ours."""
+    dirs = [install_dir()] if install is None else [install]
+    dirs.append(os.path.expanduser("~/.peon-poke"))
+    out = []
+    for d in dirs:
+        out.append(os.path.join(d, "bin", "peon-poke"))
+        out.append(os.path.join(d, "adapters", "codex.sh"))
+    return [json.dumps(p)[1:-1] for p in out]
+
+
+def codex_notify_line(install):
+    esc = json.dumps(os.path.join(install, "bin", "peon-poke"))[1:-1]
+    return 'notify = ["%s", "codex"]' % esc
+
+
+def is_our_notify(line, escapes):
+    body = line.split("#", 1)[0]
+    if not re.match(r"^\s*notify\s*=\s*\[", body):
+        return False
+    return any(e in body for e in escapes)
+
+
+def toml_parse_ok(text):
+    """Parse-validate TOML. With tomllib in this interpreter, directly;
+    otherwise ask a 3.11+ python3 if one is on PATH (validation only —
+    the edit logic itself never leaves this process). With no validator
+    available, structural edits proceed as they always did pre-3.11."""
+    if not text.strip():
+        return True
+    if tomllib is not None:
+        try:
+            tomllib.loads(text)
+            return True
+        except Exception:
+            return False
+    for exe in ("python3.13", "python3.12", "python3.11"):
+        p = shutil.which(exe)
+        if not p:
+            continue
+        try:
+            r = subprocess.run(
+                [p, "-c", "import sys, tomllib; tomllib.loads(sys.stdin.buffer.read().decode())"],
+                input=text.encode(), stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL, timeout=10)
+            return r.returncode == 0
+        except Exception:
+            continue
+    return True
+
+
+def codex_strip_managed(lines, escapes):
+    """Strip every managed line we ever wrote (marker+notify pair or bare
+    managed notify), plus one adjacent separator blank per seam. Heals
+    registrations made by older setups: notify appended after a [table]
+    header (silently scoped to that table) or duplicated after a user's own
+    top-level notify (invalid TOML)."""
+    out, seams, i = [], [], 0
+    while i < len(lines):
+        if lines[i].strip() == CODEX_MARKER and i + 1 < len(lines) \
+                and is_our_notify(lines[i + 1], escapes):
+            seams.append(len(out))
+            i += 2
+            continue
+        if is_our_notify(lines[i], escapes):
+            seams.append(len(out))
+            i += 1
+            continue
+        out.append(lines[i])
+        i += 1
+    for s in sorted(set(seams), reverse=True):
+        if 0 < s <= len(out) and out[s - 1].strip() == "":
+            del out[s - 1]
+        elif s < len(out) and out[s].strip() == "":
+            del out[s]
+    return out
+
+
+def codex_first_table(lines):
+    return next((i for i, l in enumerate(lines) if re.match(r"^\s*\[", l)), None)
+
+
+def register_codex(install):
+    """Returns 0 registered/ok, 2 user-notify preserved (our strays removed),
+    3 file not valid TOML (untouched), 4 edit would break TOML (untouched)."""
+    path = codex_toml_path()
+    escapes = codex_owned_escapes(install)
+    try:
+        with open(path) as f:
+            src = f.read()
+    except FileNotFoundError:
+        src = ""
+    except OSError as e:
+        warn("cannot read %s (%s) — file left untouched" % (path, e))
+        return 3
+
+    lines = src.splitlines()
+    base = codex_strip_managed(lines, escapes)
+    ft = codex_first_table(base)
+
+    if src and not toml_parse_ok(src):
+        if base != lines and toml_parse_ok("\n".join(base) + "\n"):
+            plain_warn("peon-poke: healing invalid ~/.codex/config.toml caused by"
+                       " an older peon-poke setup")
+        else:
+            warn("~/.codex/config.toml is not valid TOML — file left untouched,"
+                 " fix it and re-run peon-poke setup")
+            return 3
+
+    user_notify = any(re.match(r"^\s*notify\s*=", l)
+                      for l in base[:ft if ft is not None else len(base)])
+
+    if user_notify:
+        new = "\n".join(base)
+        if not new.endswith("\n"):
+            new += "\n"
+        status = 2
+    else:
+        block = [CODEX_MARKER, codex_notify_line(install)]
+        if ft is None:
+            out = list(base)
+            if out and out[-1].strip() != "":
+                out.append("")
+            out += block
+        else:
+            out = list(base[:ft])
+            while out and out[-1].strip() == "":
+                out.pop()
+            out += [""] + block + [""] + list(base[ft:])
+        new = "\n".join(out) + "\n"
+        status = 0
+
+    if new == src:
+        return status  # already in the desired state — byte-identical, no churn
+    if not toml_parse_ok(new):
+        warn("refusing to write %s: edit would break TOML" % path)
+        return 4
+    if src:
+        stable_backup(path)
+    atomic_write(path, new)
+    return status
+
+
+def unregister_codex(install=None):
+    """Remove only the managed notify lines we added. Returns count of
+    managed blocks/lines removed, or -1 when the file was left untouched."""
+    path = codex_toml_path()
+    if not os.path.isfile(path):
+        return 0
+    escapes = codex_owned_escapes(install)
+    try:
+        with open(path) as f:
+            lines = f.read().splitlines()
+    except OSError as e:
+        plain_warn("peon-poke: cannot read %s (%s) — left untouched" % (path, e))
+        return -1
+
+    out, seams, i, removed = [], [], 0, 0
+    while i < len(lines):
+        if lines[i].strip() == CODEX_MARKER and i + 1 < len(lines) \
+                and is_our_notify(lines[i + 1], escapes):
+            seams.append(len(out))
+            i += 2
+            removed += 1
+            continue
+        if is_our_notify(lines[i], escapes):
+            seams.append(len(out))
+            i += 1
+            removed += 1
+            continue
+        out.append(lines[i])
+        i += 1
+    for s in sorted(set(seams), reverse=True):
+        if 0 < s <= len(out) and out[s - 1].strip() == "":
+            del out[s - 1]
+        elif s < len(out) and out[s].strip() == "":
+            del out[s]
+
+    if not removed:
+        if any("peon-poke" in l for l in lines):
+            plain_warn("peon-poke: mentions of peon-poke found in %s but no"
+                       " managed notify — file left untouched" % path)
+        return -1
+
+    while out and out[-1].strip() == "":
+        out.pop()
+    new = "\n".join(out) + ("\n" if out else "")
+    if not toml_parse_ok(new):
+        plain_warn("peon-poke: refusing to rewrite %s: edit would break TOML"
+                   % path)
+        return -1
+    stable_backup(path)
+    atomic_write(path, new)
+    return removed
+
+
+# ----------------------------------------------------- plugin/extension ---
+# Recognized-as-ours: the setup marker phrase in the first 8 lines (kept
+# stable across generations of these files), or the pre-marker pi header.
+
+PLUGIN_MARKERS = ("peon-poke-setup", "pi (and oh-my-pi) extension")
+
+EXT_DIRS = (os.path.expanduser("~/.pi/agent/extensions"),
+            os.path.expanduser("~/.omp/agent/extensions"))
+
+OC_PLUGIN_DIR = os.path.join(
+    os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"),
+    "opencode", "plugin")
+
+
+def plugin_is_ours(path):
+    return any(first_bytes_contains(path, m) for m in PLUGIN_MARKERS)
+
+
+def install_owned_file(src, dest):
+    """Never clobbers a foreign file; keeps one stable .peon-poke-bak of a
+    user-modified copy of ours before refreshing; never follows/replace a
+    symlink."""
+    if os.path.exists(dest) or os.path.islink(dest):
+        if os.path.islink(dest):
+            warn("%s is a symlink — left untouched (remove it to let peon-poke"
+                 " manage this path)" % dest)
+            return
+        if not os.path.isfile(dest):
+            warn("%s exists but is not a regular file — skipping" % dest)
+            return
+        if not plugin_is_ours(dest):
+            warn("%s exists but is not recognized as ours — left untouched" % dest)
+            return
+        if not os.path.exists(dest + ".peon-poke-bak") \
+                and not os.path.islink(dest + ".peon-poke-bak") \
+                and not filecmp_eq(dest, src):
+            shutil.copy2(dest, dest + ".peon-poke-bak")
+            info("Existing file saved to %s.peon-poke-bak (modified copy preserved)" % dest)
+    shutil.copy2(src, dest)
+    info("Installed: %s" % dest)
+
+
+def filecmp_eq(a, b):
+    try:
+        if os.path.getsize(a) != os.path.getsize(b):
+            return False
+        with open(a, "rb") as fa, open(b, "rb") as fb:
+            return fa.read() == fb.read()
+    except OSError:
+        return False
+
+
+def uninstall_plugin(path):
+    """If setup preserved a user-customized copy in .peon-poke-bak, restore
+    the user's version instead of deleting it — their edits are theirs."""
+    if not os.path.isfile(path):
+        return
+    if not plugin_is_ours(path):
+        plain_warn("peon-poke: %s is not recognized as ours — left untouched" % path)
+        return
+    if os.path.isfile(path + ".peon-poke-bak"):
+        os.replace(path + ".peon-poke-bak", path)
+        plain_info("Restored user-modified %s (from .peon-poke-bak)" % path)
+    else:
+        os.remove(path)
+        plain_info("Removed %s" % path)
+
+
+# ------------------------------------------------------------ PATH links ---
+# We expose commands only via dirs already on PATH and writable; we never
+# create PATH entries or touch shell profiles. Both command names point at
+# the one CLI file — the uninstall subcommand is chosen by argv[0] basename.
+
+LINK_CANDIDATE_DIRS = (os.path.expanduser("~/.local/bin"),
+                       os.path.expanduser("~/bin"),
+                       "/usr/local/bin")
+
+
+def path_link_targets(install):
+    return {  # name -> (our target, legacy target we still heal/remove)
+        "peon-poke": (os.path.join(install, "bin", "peon-poke"), None),
+        "peon-poke-uninstall": (os.path.join(install, "bin", "peon-poke"),
+                                os.path.join(install, "bin", "peon-poke-uninstall")),
+    }
+
+
+def install_path_links(install):
+    want = path_link_targets(install)
+    for d in LINK_CANDIDATE_DIRS:
+        if d.rstrip("/") not in os.environ.get("PATH", "").split(os.pathsep):
+            continue
+        if not (os.path.isdir(d) and os.access(d, os.W_OK)):
+            continue
+        acted = False
+        for name, (target, legacy) in want.items():
+            link = os.path.join(d, name)
+            if os.path.lexists(link):
+                if not os.path.islink(link):
+                    warn("%s exists and is not ours — not replacing it" % link)
+                    continue
+                current = os.readlink(link)
+                if current == target:
+                    continue  # already exactly ours
+                if legacy and current == legacy:
+                    pass  # our own <=0.6.x launcher link — refresh below
+                else:
+                    warn("%s exists and is not ours — not replacing it" % link)
+                    continue
+            with contextlib.suppress(OSError):
+                os.unlink(link)
+            try:
+                os.symlink(target, link)
+            except OSError as e:
+                warn("could not install %s (%s)" % (link, e))
+                continue
+            if name.endswith("uninstall"):
+                info("Uninstall command installed: %s" % link)
+            else:
+                info("Command installed: %s" % link)
+            acted = True
+        if acted:
+            break
+
+
+def uninstall_path_links(install):
+    want = path_link_targets(install)
+    for d in LINK_CANDIDATE_DIRS:
+        for name, (target, legacy) in want.items():
+            link = os.path.join(d, name)
+            if not os.path.islink(link):
+                continue
+            try:
+                current = os.readlink(link)
+            except OSError:
+                continue
+            if current == target or (legacy and current == legacy):
+                with contextlib.suppress(OSError):
+                    os.unlink(link)
+                plain_info("Removed %s" % link)
+
+
+# ---------------------------------------------------------------- setup ---
+
+def cmd_setup(_args):
+    src = src_dir()
+    install = install_dir()
+    version = "unknown"
+    try:
+        with open(os.path.join(src, "VERSION")) as f:
+            version = f.read().strip()
+    except OSError:
+        pass
+
+    for required in ("bin/poke", "peon-poke"):
+        p = os.path.join(src, required)
+        if not (os.path.isfile(p) and os.access(p, os.X_OK)):
+            warn("%s not found or not executable — run install.sh or brew first" % p)
+            return 1
+
+    info("Installing to %s" % install)
+    for sub in ("bin", "adapters", "plugins/pi", "plugins/opencode"):
+        os.makedirs(os.path.join(install, sub), exist_ok=True)
+    copies = [
+        (os.path.join(src, "bin/poke"), os.path.join(install, "bin/poke")),
+        (os.path.join(src, "peon-poke"), os.path.join(install, "bin/peon-poke")),
+        (os.path.join(src, "poke.sh"), os.path.join(install, "poke.sh")),
+        (os.path.join(src, "plugins/pi/poke.ts"),
+         os.path.join(install, "plugins/pi/poke.ts")),
+    ]
+    oc_src = os.path.join(src, "plugins/opencode/peon-poke.ts")
+    if os.path.isfile(oc_src):
+        copies.append((oc_src, os.path.join(install, "plugins/opencode/peon-poke.ts")))
+    uninstall_src = os.path.join(src, "uninstall.sh")
+    if os.path.isfile(uninstall_src):
+        copies.append((uninstall_src, os.path.join(install, "uninstall.sh")))
+    adapters_src = os.path.join(src, "adapters")
+    if os.path.isdir(adapters_src):
+        for name in sorted(os.listdir(adapters_src)):
+            if name.endswith(".sh"):
+                copies.append((os.path.join(adapters_src, name),
+                               os.path.join(install, "adapters", name)))
+    for s, d in copies:
+        shutil.copy2(s, d)
+        if d.endswith(".sh") or os.path.basename(d) in ("poke", "peon-poke"):
+            os.chmod(d, 0o755)
+
+    # --- ownership markers (the ONLY authorization for later removal) ---
+    stamp_marker(install, ".peon-poke-install", "install", version)
+    stamp_marker(config_dir(), ".peon-poke-config", "config", version)
+
+    # --- config (never overwrite an existing one) ---
+    cfg = os.path.join(config_dir(), "config.json")
+    if not os.path.isfile(cfg):
+        os.makedirs(config_dir(), exist_ok=True)
+        shutil.copy2(os.path.join(src, "config.json"), cfg)
+        info("Config written to %s" % cfg)
+    else:
+        info("Config already present at %s (kept)" % cfg)
+
+    # --- Claude Code hooks ---
+    if os.path.isdir(os.path.expanduser("~/.claude")):
+        if register_claude(install):
+            info("Claude Code hooks registered (Stop, Notification, SessionStart)")
+        else:
+            warn("Claude Code hooks NOT registered — fix ~/.claude/settings.json"
+                 " and re-run peon-poke setup")
+    else:
+        info("Claude Code not detected (~/.claude) — skipping")
+
+    # --- Codex notify ---
+    if os.path.isdir(os.path.expanduser("~/.codex")):
+        status = register_codex(install)
+        if status == 0:
+            info("Codex notify registered in ~/.codex/config.toml")
+        elif status == 2:
+            warn("Codex notify NOT registered — existing top-level notify"
+                 " preserved (our stray entries removed if any)")
+        elif status == 3:
+            warn("Codex notify NOT registered — ~/.codex/config.toml is not valid TOML")
+        else:
+            warn("Codex notify NOT registered — see stderr above")
+    else:
+        info("Codex not detected (~/.codex) — skipping")
+
+    # --- pi / oh-my-pi extensions ---
+    for ext_dir in EXT_DIRS:
+        if os.path.isdir(ext_dir):
+            install_owned_file(os.path.join(install, "plugins/pi/poke.ts"),
+                               os.path.join(ext_dir, "peon-poke.ts"))
+        else:
+            info("%s not detected (%s) — skipping"
+                 % (os.path.basename(os.path.dirname(os.path.dirname(ext_dir))),
+                    ext_dir))
+
+    # --- OpenCode plugin (auto-discovered, no config edits needed) ---
+    if os.path.isdir(os.path.dirname(OC_PLUGIN_DIR)):
+        os.makedirs(OC_PLUGIN_DIR, exist_ok=True)
+        install_owned_file(os.path.join(install, "plugins/opencode/peon-poke.ts"),
+                           os.path.join(OC_PLUGIN_DIR, "peon-poke.ts"))
+    else:
+        info("OpenCode not detected (%s) — skipping" % OC_PLUGIN_DIR)
+
+    # --- PATH commands (guarded, see install_path_links) ---
+    install_path_links(install)
+
+    print()
+    info("%speon-poke installed.%s Patterns live in %s" % (BOLD, RESET, cfg))
+    print("  Uninstall: peon-poke-uninstall   (or: bash %s/uninstall.sh)" % install)
+    print("  Manual adapters: gemini, grok, cursor — see README.md")
+    print("  Test: %s           # default pattern: fortune" % os.path.join(install, "bin/poke"))
+    print("  Status: peon-poke doctor")
+    return 0
+
+
+# ------------------------------------------------------------ uninstall ---
+
+def safe_rm(directory, marker, kind, what):
+    """Guarded removal: refuses /, $HOME, empty and non-canonical paths, and
+    anything not stamped with a valid peon-poke ownership marker for that
+    directory kind. Override: POKE_UNSAFE_RM=1."""
+    directory = (directory or "").rstrip("/") or "/"
+    if directory == "/":
+        plain_warn("refusing to remove: unsafe target")
+        return False
+    parent = os.path.dirname(directory)
+    if not os.path.isdir(parent):
+        plain_warn("refusing to remove '%s': parent directory does not exist" % directory)
+        return False
+    real = os.path.join(os.path.realpath(parent), os.path.basename(directory))
+    home_real = os.path.realpath(os.path.expanduser("~"))
+    if real in ("/", home_real):
+        plain_warn("refusing to remove '%s' (refuse-list: / and $HOME)" % real)
+        return False
+    if marker_ok(os.path.join(real, marker), kind):
+        shutil.rmtree(real)
+        plain_info("Removed %s" % real)
+        return True
+    if os.environ.get("POKE_UNSAFE_RM") == "1":
+        plain_warn("POKE_UNSAFE_RM=1 set: removing '%s' despite failing safety checks" % real)
+        shutil.rmtree(real)
+        plain_info("Removed %s" % real)
+        return True
+    plain_warn("refusing to remove '%s': no valid peon-poke %s ownership marker" % (real, what))
+    plain_warn("(install predates markers? re-run peon-poke setup — or"
+               " POKE_UNSAFE_RM=1 if you are sure)")
+    return False
+
+
+def cmd_uninstall(args):
+    install = install_dir()
+
+    n = unregister_claude()
+    if n > 0:
+        plain_info("Claude Code hooks removed")
+    else:
+        plain_warn("No peon-poke hooks found in Claude settings (left untouched)")
+
+    n = unregister_codex(install)
+    if n > 0:
+        plain_info("Codex notify removed")
+    else:
+        plain_warn("No managed Codex notify found (left untouched)")
+
+    for f in [os.path.join(d, "peon-poke.ts") for d in EXT_DIRS] + \
+             [os.path.join(OC_PLUGIN_DIR, "peon-poke.ts")]:
+        uninstall_plugin(f)
+
+    uninstall_path_links(install)
+
+    ok = safe_rm(install, ".peon-poke-install", "install", "runtime")
+    if getattr(args, "purge", False):
+        ok = safe_rm(config_dir(), ".peon-poke-config", "config", "configuration") and ok
+    else:
+        kept = os.path.join(config_dir(), "config.json")
+        plain_info("Kept %s (use --purge to remove)" % kept)
+    return 0 if ok else 1
+
+
+# --------------------------------------------------------------- doctor ---
+
+def cmd_doctor(_args):
+    def line(okay, label, detail):
+        print("  %s %s: %s" % ({True: "✓", False: "✗", None: "·"}[okay], label, detail))
+        return okay is False
+
+    problems = []
+    print("peon-poke doctor")
+    v = sys.version_info
+    problems.append(line(v >= (3, 8), "python",
+                         "%d.%d.%d (%s)" % (v[0], v[1], v[2], sys.executable)
+                         + ("" if v >= (3, 8) else " — 3.8+ required")))
+
+    install = install_dir()
+    problems.append(line(os.path.isdir(install), "install dir", install))
+
+    binary = poke_bin()
+    binary_ok = os.path.isfile(binary) and os.access(binary, os.X_OK)
+    problems.append(line(binary_ok, "poke binary", binary))
+
+    cfgp = config_path()
+    cfg = load_config() if os.path.isfile(cfgp) else None
+    if cfg is None:
+        problems.append(line(False, "config", "%s (missing or unparseable)" % cfgp))
+    else:
+        cats = cfg.get("categories", {})
+        on = [c for c, v in cats.items() if v]
+        problems.append(line(True, "config",
+                             "%s — %d/%d categories on, %s" %
+                             (cfgp, len(on), len(cats),
+                              "enabled" if cfg.get("enabled", True) else "DISABLED")))
+
+    sp = claude_settings_path()
+    if os.path.isfile(sp):
+        try:
+            with open(sp) as f:
+                hooks = (json.load(f) or {}).get("hooks", {})
+            legacy, current = claude_hook_patterns()
+            ours = sum(1 for entries in hooks.values() if isinstance(entries, list)
+                       for e in entries if is_our_hook_entry(e, (legacy, current)))
+            problems.append(line(ours > 0, "claude code",
+                                 "%d hook(s) registered" % ours if ours
+                                 else "no peon-poke hooks in %s" % sp))
+        except Exception:
+            problems.append(line(False, "claude code", "cannot parse %s" % sp))
+    else:
+        line(None, "claude code", "not detected")
+
+    tp = codex_toml_path()
+    if os.path.isfile(tp):
+        try:
+            with open(tp) as f:
+                ours = any(is_our_notify(l, codex_owned_escapes()) for l in f)
+            problems.append(line(ours, "codex", "notify registered" if ours
+                                 else "no managed notify in %s" % tp))
+        except OSError:
+            problems.append(line(False, "codex", "cannot read %s" % tp))
+    else:
+        line(None, "codex", "not detected")
+
+    for d in EXT_DIRS:
+        name = os.path.basename(os.path.dirname(os.path.dirname(d)))
+        p = os.path.join(d, "peon-poke.ts")
+        if os.path.isdir(d):
+            problems.append(line(os.path.isfile(p), name,
+                                 "extension installed" if os.path.isfile(p)
+                                 else "extension dir present, %s missing" % p))
+        else:
+            line(None, name, "not detected")
+    ocp = os.path.join(OC_PLUGIN_DIR, "peon-poke.ts")
+    if os.path.isdir(os.path.dirname(OC_PLUGIN_DIR)):
+        problems.append(line(os.path.isfile(ocp), "opencode",
+                             "plugin installed" if os.path.isfile(ocp)
+                             else "plugin dir present, %s missing" % ocp))
+    else:
+        line(None, "opencode", "not detected")
+
+    targets = path_link_targets(install)
+    for name, (target, _legacy) in targets.items():
+        found = ""
+        for d in LINK_CANDIDATE_DIRS:
+            link = os.path.join(d, name)
+            if os.path.islink(link) and os.readlink(link) == target:
+                found = link
+                break
+        line(None, "command '%s'" % name, found or "not on PATH (optional)")
+
+    if any(problems):
+        print("problems found — run the failing step's fix (often: peon-poke setup)")
+        return 1
+    print("all good")
+    return 0
+
+
+# ----------------------------------------------------------------- main ---
+
+def read_version():
+    try:
+        with open(os.path.join(os.path.dirname(self_path()), "VERSION")) as f:
+            return f.read().strip()
+    except OSError:
+        return "unknown"
+
+
+def build_parser():
+    p = argparse.ArgumentParser(
+        prog="peon-poke",
+        description="Trackpad haptic notifications for AI coding agents.")
+    p.add_argument("--version", action="version",
+                   version="peon-poke %s" % read_version())
+    sub = p.add_subparsers(dest="command", metavar="<command>")
+
+    d = sub.add_parser("dispatch", help="map an agent event to a haptic pattern")
+    d.add_argument("token", nargs="?", help="category or pattern name/gap list")
+    d.set_defaults(func=cmd_dispatch)
+
+    d = sub.add_parser("play", help="fire a pattern now (alias of dispatch)")
+    d.add_argument("token", nargs="?", help="pattern name or gap list")
+    d.set_defaults(func=cmd_dispatch)
+
+    for name, help_, fn in (
+            ("codex", "OpenAI Codex CLI notify adapter", cmd_codex),
+            ("gemini", "Gemini CLI hook adapter", cmd_gemini),
+            ("cursor", "Cursor IDE hook adapter", cmd_cursor),
+            ("grok", "Grok Build hook adapter", cmd_grok)):
+        d = sub.add_parser(name, help=help_)
+        d.add_argument("event", nargs="?", help="event name or JSON (else stdin)")
+        d.set_defaults(func=fn)
+
+    d = sub.add_parser("setup", help="install runtime and register hooks")
+    d.set_defaults(func=cmd_setup)
+
+    d = sub.add_parser("uninstall", help="remove registrations and installed files")
+    d.add_argument("--purge", action="store_true",
+                   help="also remove ~/.config/peon-poke/config.json")
+    d.set_defaults(func=cmd_uninstall)
+
+    d = sub.add_parser("doctor", help="installation and config health report")
+    d.set_defaults(func=cmd_doctor)
+    return p
+
+
+def main(argv):
+    # `peon-poke-uninstall` is a symlink to this file: select the uninstall
+    # subcommand by argv[0] so no launcher script is needed.
+    if os.path.basename(argv[0]) == "peon-poke-uninstall":
+        argv = [argv[0], "uninstall"] + argv[1:]
+    parser = build_parser()
+    args = parser.parse_args(argv[1:])
+    if not getattr(args, "func", None):
+        parser.print_help()
+        return 0
+    try:
+        return args.func(args) or 0
+    except KeyboardInterrupt:
+        return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

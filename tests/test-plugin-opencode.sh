@@ -37,12 +37,12 @@ else
 fi
 
 # --- 2 + 3. harness run ---------------------------------------------------
-mkdir -p "$TMP/pokedir"
-cat > "$TMP/pokedir/poke.sh" <<EOF
+mkdir -p "$TMP/pokedir/bin"
+cat > "$TMP/pokedir/bin/peon-poke" <<EOF
 #!/bin/bash
-echo "\$1" >> "$TMP/fired"
+echo "\$2" >> "$TMP/fired"
 EOF
-chmod +x "$TMP/pokedir/poke.sh"
+chmod +x "$TMP/pokedir/bin/peon-poke"
 
 OUT="$(env HOME="$TMP/home" POKE_DIR="$TMP/pokedir" bun "$HARNESS" "$PLUGIN" 2>&1)"
 RC=$?

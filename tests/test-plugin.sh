@@ -3,7 +3,7 @@
 #
 # 1. transpiles cleanly (bun build gate),
 # 2. registers agent_settled + ui_prompt_start and actually fires the
-#    dispatcher (stub poke.sh records the category),
+#    CLI dispatcher (stub bin/peon-poke records the category),
 # 3. survives a MISSING install dir: spawn() failures arrive as async
 #    'error' events — without a listener, bun crashes the host process
 #    (verified: old plugin shape exits 1). The extension must exit 0.
@@ -35,12 +35,12 @@ else
 fi
 
 # --- 2. fires dispatcher with correct categories -------------------------
-mkdir -p "$TMP/pokedir"
-cat > "$TMP/pokedir/poke.sh" <<EOF
+mkdir -p "$TMP/pokedir/bin"
+cat > "$TMP/pokedir/bin/peon-poke" <<EOF
 #!/bin/bash
-echo "\$1" >> "$TMP/fired"
+echo "\$2" >> "$TMP/fired"
 EOF
-chmod +x "$TMP/pokedir/poke.sh"
+chmod +x "$TMP/pokedir/bin/peon-poke"
 OUT="$(env HOME="$TMP/home" POKE_DIR="$TMP/pokedir" bun "$HARNESS" "$PLUGIN" 2>&1)"
 RC=$?
 if [ $RC = 0 ]; then

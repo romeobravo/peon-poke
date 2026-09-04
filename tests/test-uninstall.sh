@@ -1,8 +1,10 @@
 #!/bin/bash
-# test-uninstall.sh — destructive-safety tests for uninstall.sh using a
-# fake HOME (never touches the real one). Covers: exact managed-block
-# removal, preservation of user notes/values, rm -rf guards (ownership
-# markers required — name/shape alone never authorizes), --purge, and the
+# test-uninstall.sh — destructive-safety tests for peon-poke uninstall
+# (uninstall.sh is a shim to `peon-poke uninstall`) using a fake HOME
+# (never touches the real one). Covers: exact managed-block removal (CLI
+# shape AND legacy bash/adapter shape), legacy Claude hook removal,
+# preservation of user notes/values, rm -rf guards (ownership markers
+# required — name/shape alone never authorizes), --purge, and the
 # override escape hatch.
 set -u
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -52,7 +54,25 @@ cmp -s "$TMP/user-note.toml" "$H/.codex/config.toml" \
   && ok "untouched file: no backup churn" || bad "untouched file: wrote backup anyway"
 
 # ------------------------------------------------ managed block removal ---
+# current CLI shape
 cat > "$TMP/managed.toml" <<'EOF'
+model = "gpt-5"
+
+# peon-poke (managed — remove to uninstall)
+notify = ["PLACEHOLDER/bin/peon-poke", "codex"]
+
+[tui]
+notifications = true
+EOF
+sed "s|PLACEHOLDER|$H/.peon-poke|" "$TMP/managed.toml" > "$TMP/managed-filled.toml"
+fresh "$TMP/managed-filled.toml"; run_uninstall >/dev/null 2>&1
+printf 'model = "gpt-5"\n\n[tui]\nnotifications = true\n' | cmp -s - "$H/.codex/config.toml" \
+  && ok "managed block (CLI shape) removed, rest byte-exact" || { bad "CLI-shape removal changed file"; cat "$H/.codex/config.toml"; }
+[ -f "$H/.codex/config.toml.peon-poke-bak" ] \
+  && ok "backup written before codex config rewrite" || bad "no backup for codex rewrite"
+
+# legacy shape (<=0.6.x wrote notify = ["bash", .../adapters/codex.sh])
+cat > "$TMP/legacy.toml" <<'EOF'
 model = "gpt-5"
 
 # peon-poke (managed — remove to uninstall)
@@ -61,12 +81,25 @@ notify = ["bash", "PLACEHOLDER/adapters/codex.sh"]
 [tui]
 notifications = true
 EOF
-sed "s|PLACEHOLDER|$H/.peon-poke|" "$TMP/managed.toml" > "$TMP/managed-filled.toml"
-fresh "$TMP/managed-filled.toml"; run_uninstall >/dev/null 2>&1
+sed "s|PLACEHOLDER|$H/.peon-poke|" "$TMP/legacy.toml" > "$TMP/legacy-filled.toml"
+fresh "$TMP/legacy-filled.toml"; run_uninstall >/dev/null 2>&1
 printf 'model = "gpt-5"\n\n[tui]\nnotifications = true\n' | cmp -s - "$H/.codex/config.toml" \
-  && ok "managed block removed, rest byte-exact" || { bad "managed block removal changed file"; cat "$H/.codex/config.toml"; }
-[ -f "$H/.codex/config.toml.peon-poke-bak" ] \
-  && ok "backup written before codex config rewrite" || bad "no backup for codex rewrite"
+  && ok "managed block (legacy adapter shape) removed" || { bad "legacy-shape removal changed file"; cat "$H/.codex/config.toml"; }
+
+# ------------------------------------------- legacy Claude hook removal ---
+rm -rf "$H"; mkdir -p "$H/.claude" "$H/.peon-poke/bin"
+cat > "$H/.claude/settings.json" <<EOF
+{"hooks": {"Stop": [
+  {"matcher": "", "hooks": [{"type": "command", "command": "bash $H/.peon-poke/poke.sh task.complete"}]},
+  {"matcher": "", "hooks": [{"type": "command", "command": "bash $H/tools/mine.sh"}]}
+]}}
+EOF
+run_uninstall >/dev/null 2>&1
+python3 - "$H/.claude/settings.json" "$H" <<'PY' 2>/dev/null && ok "legacy Claude hook removed, user hook kept" || bad "legacy Claude hook handling wrong"
+import json, sys
+hooks = json.load(open(sys.argv[1]))["hooks"]["Stop"]
+assert len(hooks) == 1 and hooks[0]["hooks"][0]["command"] == "bash " + sys.argv[2] + "/tools/mine.sh", hooks
+PY
 
 # --------------------------------------------------------- POKE_DIR=$HOME ---
 fresh

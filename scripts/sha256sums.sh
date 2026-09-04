@@ -10,6 +10,7 @@ cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 shasum -a 256 \
   install.sh \
+  peon-poke \
   peon-poke-setup \
   uninstall.sh \
   poke.sh \

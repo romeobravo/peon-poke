@@ -34,7 +34,7 @@ Structurally a haptic sibling of [peon-ping](https://github.com/PeonPing/peon-pi
 ## Requirements
 
 - macOS 12+ (Monterey) with a **built-in Force Touch trackpad** (2015+ MacBook — external Magic Trackpads are not supported)
-- `python3` (hook registration and adapters)
+- `python3` 3.8+ (dispatch, hook registration, and adapters — the `peon-poke` CLI; stock macOS `python3` works)
 - `clang` for builds from source (the Homebrew formula and `git clone` + `bash install.sh` build locally; only the curl installer ships a precompiled binary)
 
 ### Compatibility matrix
@@ -144,11 +144,25 @@ Everything lives in `~/.config/peon-poke/config.json`:
 - `strength` — click intensity for all pokes: **1–6** (1 = light tick, 6 = firm press). Default 6; values outside 1–6 fall back to 6
 - `categories` — which events poke at all (taxonomy shared with peon-ping)
 - `patterns` — any named pattern or a raw gap list works, e.g. `"task.complete": "60,120,40"`; brackets and spaces are fine too (`"[60, 120, 40]"` — passed to `poke` as a single pattern)
-- `custom` — define your own named patterns, or override built-ins: `"custom": {"doorbell": "200,700,200,700", "chirp": "40,40,400"}` makes `doorbell` available anywhere a name is used, and redefines `chirp`. Applies wherever patterns resolve (hooks + `poke.sh`); `bin/poke <name>` from a shell uses the built-ins directly
+- `custom` — define your own named patterns, or override built-ins: `"custom": {"doorbell": "200,700,200,700", "chirp": "40,40,400"}` makes `doorbell` available anywhere a name is used, and redefines `chirp`. Applies wherever patterns resolve (hooks + the CLI); `bin/poke <name>` from a shell uses the built-ins directly
 
-Test any pattern without waiting for an agent: `bash ~/.peon-poke/poke.sh doorbell` (or a raw list: `bash ~/.peon-poke/poke.sh 60,120,40`)
+Test any pattern without waiting for an agent: `peon-poke play doorbell` (or a raw list: `peon-poke play 60,120,40`; the old `bash ~/.peon-poke/poke.sh doorbell` still works)
 
-The pi/oh-my-pi extension also honors `POKE_ARGS` to bypass `poke.sh` and drive `bin/poke` directly (names or gap lists).
+The pi/oh-my-pi extension also honors `POKE_ARGS` to bypass the CLI and drive `bin/poke` directly (names or gap lists).
+
+## The `peon-poke` CLI
+
+Everything except the haptic core is one Python CLI, installed as `~/.peon-poke/bin/peon-poke` and symlinked onto your `PATH` by setup:
+
+```
+peon-poke dispatch <category|pattern>   # what hooks call (config-gated)
+peon-poke play <pattern>                # audition a pattern now
+peon-poke codex | gemini | cursor | grok # adapter events (argv/stdin JSON)
+peon-poke doctor                        # installation + config health report
+peon-poke setup / uninstall [--purge]
+```
+
+Dispatch always exits 0, fires detached, and never blocks the calling agent. Env overrides: `POKE_DIR`, `POKE_BIN`, `POKE_CONFIG`.
 
 ## Agent support
 
@@ -163,7 +177,7 @@ The pi/oh-my-pi extension also honors `POKE_ARGS` to bypass `poke.sh` and drive 
 | Grok Build | `~/.grok/hooks/peon-poke.json` | manual: `"command": "bash ~/.peon-poke/adapters/grok.sh"` |
 | Cursor | `~/.cursor/hooks.json` | manual: `{ "hooks": [{ "event": "stop", "command": "bash ~/.peon-poke/adapters/cursor.sh stop" }] }` (Cursor has no notification/permission hook — see `adapters/cursor.sh`) |
 
-Adapters are thin: read the agent's event (argv or stdin JSON), map to a category, exec `poke.sh <category>`. Porting more of peon-ping's adapters (amp, kimi, qwen, kiro, windsurf, …) follows the same two-dozen-line pattern — PRs welcome.
+Adapters are thin: read the agent's event (argv or stdin JSON), normalize it, and hand a category to the `peon-poke` CLI (`peon-poke gemini`, `peon-poke cursor`, …). The files in `adapters/` are 2-line shims kept so existing hook wiring keeps working. Porting more of peon-ping's adapters (amp, kimi, qwen, kiro, windsurf, …) is just an event table — PRs welcome.
 
 **OpenCode event mapping** (contract verified against opencode 1.18): `session.idle` → task complete, `session.error` → task error, `permission.updated` → input required, `session.created` → session start (off by default). Note: app-bundled opencode builds that sandbox their config directory (e.g. Zentty's) don't read `~/.config/opencode` — use a standard opencode install.
 
@@ -172,13 +186,13 @@ Adapters are thin: read the agent's event (argv or stdin JSON), map to a categor
 ## How it works
 
 ```
-agent event ──► adapter / hook ──► poke.sh <category>
-                                      │  config.json: enabled? which pattern?
-                                      ▼
-                                  bin/poke <pattern args>
-                                      │  MultitouchSupport.framework (private)
-                                      ▼
-                                  trackpad actuator 💥
+agent event ──► hook / plugin / adapter ──► peon-poke dispatch <category>
+                                              │  config.json: enabled? which pattern?
+                                              ▼
+                                          bin/poke <pattern args>   (C, unchanged)
+                                              │  MultitouchSupport.framework (private)
+                                              ▼
+                                          trackpad actuator 💥
 ```
 
 `poke` talks to the trackpad's haptic actuator through the private `MultitouchSupport.framework` — the same route HapticKey uses — which (unlike `NSHapticFeedbackManager`) does **not** require a finger on the glass while firing. On macOS 26 (Tahoe) several long-standing quirks are handled automatically:
@@ -194,13 +208,13 @@ peon-poke-uninstall          # removes hooks + ~/.peon-poke, keeps config
 peon-poke-uninstall --purge  # also removes config
 ```
 
-`peon-poke-setup` installs this command (symlinked into a directory already on your `PATH`, e.g. `~/.local/bin` — it never creates `PATH` entries or edits shell profiles). If no suitable directory exists, use the fallback:
+`peon-poke setup` installs this command (symlinked into a directory already on your `PATH`, e.g. `~/.local/bin` — it never creates `PATH` entries or edits shell profiles). If no suitable directory exists, use the fallback:
 
 ```bash
 bash ~/.peon-poke/uninstall.sh [--purge]
 ```
 
-The uninstaller only removes the exact `notify` block it manages in `~/.codex/config.toml` and its own entries in `~/.claude/settings.json` (both backed up first, and re-runs never overwrite your original `*.peon-poke-bak` rollback point) — your own notes and settings survive byte-for-byte. Extension files it doesn't recognize as peon-poke's are left in place. A directory is deleted only when it carries an ownership marker stamped by `peon-poke-setup` (`.peon-poke-install` / `.peon-poke-config`, containing a random install identity) — a path's name or contents never authorizes deletion, so unrelated directories that merely happen to be named `peon-poke` are safe. Refuse-list: `/` and your home. Installs made before v0.6.1 have no marker: re-run `peon-poke-setup` once, or force a deliberately custom location with `POKE_UNSAFE_RM=1`.
+The uninstaller only removes the exact `notify` block it manages in `~/.codex/config.toml` and its own entries in `~/.claude/settings.json` (both backed up first, and re-runs never overwrite your original `*.peon-poke-bak` rollback point) — your own notes and settings survive byte-for-byte. Extension files it doesn't recognize as peon-poke's are left in place. A directory is deleted only when it carries an ownership marker stamped by setup (`.peon-poke-install` / `.peon-poke-config`, containing a random install identity) — a path's name or contents never authorizes deletion, so unrelated directories that merely happen to be named `peon-poke` are safe. Refuse-list: `/` and your home. Installs made before v0.6.1 have no marker: re-run `peon-poke-setup` once, or force a deliberately custom location with `POKE_UNSAFE_RM=1`.
 
 ## FAQ
 

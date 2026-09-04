@@ -1,7 +1,8 @@
 #!/bin/bash
-# test-codex-setup.sh — TOML fixtures for peon-poke-setup's Codex
-# registration: empty, table-ending, existing top-level notify, malformed,
-# idempotency, and paths with spaces/quotes.
+# test-codex-setup.sh — TOML fixtures for peon-poke setup's Codex
+# registration (peon-poke-setup is a shim to `peon-poke setup`): empty,
+# table-ending, existing top-level notify, malformed, idempotency, paths
+# with spaces/quotes, and legacy-shape migration.
 #
 # Uses a fully isolated HOME; nothing here touches the real ~/.codex.
 set -u
@@ -68,8 +69,8 @@ scenario() { # scenario <name> — resets HOME with $TMP/initial.toml (if any)
 # ---------------------------------------------------------------- empty ---
 : > "$TMP/initial.toml"; scenario
 run_setup
-grep -q '^notify = \["bash",.*adapters/codex.sh"\]' "$H/.codex/config.toml" \
-  && ok "empty config: notify written" || bad "empty config: notify missing"
+grep -q '^notify = \[".*bin/peon-poke", "codex"\]' "$H/.codex/config.toml" \
+  && ok "empty config: notify written (CLI shape)" || bad "empty config: notify missing"
 [ "$(toml_notify_toplevel "$H/.codex/config.toml")" = "yes" ] \
   && ok "empty config: valid top-level TOML" || bad "empty config: $(toml_notify_toplevel "$H/.codex/config.toml")"
 
@@ -147,17 +148,28 @@ if [ -n "$TOML_PY" ]; then
 import os, sys, tomllib
 d = tomllib.load(open(sys.argv[1], "rb"))
 n = d.get("notify", [])
-want = ["bash", os.path.join(sys.argv[2], ".peon-poke", "adapters", "codex.sh")]
+want = [os.path.join(sys.argv[2], ".peon-poke", "bin", "peon-poke"), "codex"]
 print("yes" if n == want else "no")
 PY
   R="$(cat "$TMP/weird.out")"
   [ "$R" = "yes" ] && ok "quoted/space path: valid TOML, correct unescaped path" || bad "quoted/space path: $R"
 else
-  grep -q 'notify = \["bash", ".*\\"quote\\".*adapters/codex.sh"\]' "$CFG" \
+  grep -q 'notify = \[".*\\"quote\\".*bin/peon-poke", "codex"\]' "$CFG" \
     && ok "quoted/space path: properly escaped in TOML" || bad "quoted/space path: bad escaping"
 fi
-bash "$WEIRD/.peon-poke/adapters/codex.sh" '{"type":"agent-turn-complete"}' >/dev/null 2>&1 </dev/null \
-  && ok "quoted/space path: adapter runs from quoted path" || bad "quoted/space path: adapter fails"
+# the installed CLI must run from the quoted path and dispatch
+mkdir -p "$WEIRD/stub"
+cat > "$WEIRD/stub/poke" <<EOF
+#!/bin/bash
+echo "\$1" >> "$TMP/weird-fired"
+EOF
+chmod +x "$WEIRD/stub/poke"
+env HOME="$WEIRD" POKE_BIN="$WEIRD/stub/poke" \
+  "$WEIRD/.peon-poke/bin/peon-poke" codex '{"type":"agent-turn-complete"}' >/dev/null 2>&1 </dev/null
+for i in 1 2 3 4 5 6 7 8 9 10; do [ -s "$TMP/weird-fired" ] && break; sleep 0.1; done
+[ "$(cat "$TMP/weird-fired" 2>/dev/null)" = "fortune" ] \
+  && ok "quoted/space path: CLI runs from quoted path and dispatches" \
+  || bad "quoted/space path: CLI dispatch failed ($(cat "$TMP/weird-fired" 2>/dev/null))"
 
 # --------------------------------------------- old-buggy registrations ---
 # Setups <= v0.4.4 appended the block at EOF without TOML awareness.
@@ -181,7 +193,8 @@ if [ -n "$TOML_PY" ]; then
 import sys, tomllib
 d = tomllib.load(open(sys.argv[1], "rb"))
 tui = d.get("tui", {})
-print("yes" if "notify" not in tui and d["notify"][1].endswith("/adapters/codex.sh") else "no")
+print("yes" if "notify" not in tui and d["notify"][0].endswith("/bin/peon-poke")
+      and d["notify"][1] == "codex" else "no")
 PY
   R="$(cat "$TMP/tui.out")"
   [ "$R" = "yes" ] && ok "migration: [tui] no longer contains notify" || bad "migration: [tui] still contains notify"
@@ -203,6 +216,24 @@ grep -q 'my_notifier' "$H/.codex/config.toml" \
   && ok "migration: user notifier survived the heal" || bad "migration: user notifier lost"
 grep -q 'peon-poke/adapters/codex.sh' "$H/.codex/config.toml" \
   && bad "migration: our stray duplicate remains" || ok "migration: our stray duplicate removed"
+
+# --------------------------------------------- legacy well-placed registration ---
+# A <=0.6.x registration (marker + bash/adapter notify at top level) must
+# be upgraded in place to the CLI shape, with no strays left.
+cat > "$TMP/initial.toml" <<EOF
+model = "gpt-5"
+
+# peon-poke (managed — remove to uninstall)
+notify = ["bash", "$H/.peon-poke/adapters/codex.sh"]
+EOF
+scenario; run_setup
+[ "$(toml_notify_toplevel "$H/.codex/config.toml")" = "yes" ] \
+  && ok "legacy registration: exactly one notify after upgrade" \
+  || bad "legacy registration: $(toml_notify_toplevel "$H/.codex/config.toml")"
+grep -q 'notify = \[".*bin/peon-poke", "codex"\]' "$H/.codex/config.toml" \
+  && ok "legacy registration: upgraded to CLI shape" || bad "legacy registration: CLI shape missing"
+grep -q 'adapters/codex.sh' "$H/.codex/config.toml" \
+  && bad "legacy registration: old adapter shape left behind" || ok "legacy registration: old shape gone"
 
 # --------------------------------------- comment-spoofed foreign notify ---
 # Ownership must be decided on the comment-stripped assignment: a

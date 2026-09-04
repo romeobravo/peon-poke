@@ -1,6 +1,10 @@
 # AGENTS.md — peon-poke
 
-macOS trackpad haptic notifications for AI coding agents. Single-file C core (`src/poke.c`) + bash glue + one pi/oh-my-pi TypeScript extension. Runtime installs to `~/.peon-poke/`, config lives in `~/.config/peon-poke/config.json`.
+macOS trackpad haptic notifications for AI coding agents. Single-file C core (`src/poke.c`) + single-file Python control-plane CLI (`peon-poke`) + thin `sh` compat shims + one pi/oh-my-pi TypeScript extension. Runtime installs to `~/.peon-poke/`, config lives in `~/.config/peon-poke/config.json`.
+
+## Architecture (post Python-CLI rewrite)
+
+All logic — dispatch, adapters, setup, uninstall, doctor — lives in the Python CLI `peon-poke` (python3.8+, stdlib only, tomllib used opportunistically). The `.sh` entry points (`poke.sh`, `peon-poke-setup`, `uninstall.sh`, `adapters/{gemini,cursor,grok}.sh`) are 2–5 line `exec` shims with zero logic, kept for hook wiring, brew, and muscle memory. Claude hooks are registered as `…/bin/peon-poke dispatch <category>` (shlex-joined); legacy `bash …/poke.sh <category>` entries are recognized as ours everywhere (setup heals them, uninstall removes both shapes). Same for Codex: `notify = ["…/bin/peon-poke", "codex"]` now, legacy `notify = ["bash", "…/adapters/codex.sh"]` still owned. `peon-poke` and `peon-poke-uninstall` PATH symlinks both point at the one CLI file (uninstall selected by argv[0]). See `PLAN-python-cli.md`.
 
 ## Post-mortems — lessons paid for during the original build
 
@@ -11,7 +15,7 @@ These bit us once; don't relearn them:
 3. **A failed multi-edit is all-or-nothing — verify the survivors.** An edit batch that aborted on one non-matching `oldText` silently dropped the *critical* change (the default pattern stayed `chirp` while README, config, and release notes all claimed `fortune`). The build still passed; only firing the binary exposed it. **Rule: after any partially-failed edit or rename, `grep` for the expected new content everywhere — code, docs, config examples (`heart` survived in two README spots during the heartbeat rename).**
 4. **Structural edits clipped a `for`-loop header** when three overlapping edits reorganized a function; the compiler caught it, but only because we rebuilt immediately. **Rule: restructuring = one precise edit per region, then `make` before anything else.**
 5. **Direction bugs come from naming, not just code.** `rampup`/`rampdown` was confused twice: once as an encoding typo (`argv[1][4] == 'p'` matched neither word — index 4 of `rampup` is `u`), once as a semantic mislabel (a pattern named `slowdown` that speeds up). **Rule: name patterns by what the user feels, and verify the felt result by firing — never by rereading the gap table.**
-6. **Two artifacts, one truth.** The repo and the live `~/.peon-poke/` install drift the moment you edit one. After touching `src/poke.c`, `poke.sh`, or the config schema: rebuild, `cp` into `~/.peon-poke/`, and fire through the dispatcher. Hook output is suppressed by design, so verify the detached child with `pgrep -fl bin/poke` — it shows the resolved pattern name and caught several would-be silent misroutes.
+6. **Two artifacts, one truth.** The repo and the live `~/.peon-poke/` install drift the moment you edit one. After touching `src/poke.c`, `peon-poke`, `poke.sh`, or the config schema: rebuild, `cp` into `~/.peon-poke/` (bin/peon-poke for the CLI), and fire through the dispatcher. Hook output is suppressed by design, so verify the detached child with `pgrep -fl bin/poke` — it shows the resolved pattern name and caught several would-be silent misroutes.
 7. **Nothing fetched at install time may come from a mutable ref.** External review flagged that the curl installer pulled its payload from `main` — every push was a silent release. Fixed by resolving the latest release tag (plus `SHA256SUMS`). Keep it that way: new install-time files must be tag-served and manifest-verified, always.
 8. **Verify repo state after `gh` mutations.** Visibility flipped unnoticed at one point; `gh repo view --json visibility` after operations that touch repo settings is cheap insurance.
 9. **A directory's name is not an ownership proof.** The uninstaller once authorized `rm -rf` for any path ending in `peon-poke` — an external audit reproduced it deleting an unrelated `precious/peon-poke/`. **Rule: deletion is authorized only by an ownership marker stamped by `peon-poke-setup` (`.peon-poke-install` / `.peon-poke-config`, carrying a random install identity, distinct per directory kind). Never add back basename/shape/contents heuristics to `safe_rm`.**
@@ -24,13 +28,14 @@ These bit us once; don't relearn them:
 
 ## Invariants — never break these
 
-- `bin/poke` **always exits 0**, even on failure — hooks must never fail the host agent. Diagnostics go to stderr; `POKE_QUIET=1` silences them.
+- `bin/poke` and `peon-poke dispatch` **always exit 0**, even on failure — hooks must never fail the host agent. Diagnostics go to stderr; `POKE_QUIET=1` silences them.
 - Gap values are clamped to 0–10000 ms (`GAP_MAX_MS` in `play_sequence`): `usleep` takes an unsigned count, so an unclamped negative gap parks the process for ~71 minutes.
-- `poke.sh` fires detached, quiet, and never blocks the calling agent.
+- Dispatch fires detached (`start_new_session`), quiet, and never blocks the calling agent.
+- The marker format is shared by setup and uninstall inside `peon-poke` — change both halves together (they are one file, but keep it that way in tests too).
 - `peon-poke-setup` never clobbers `~/.claude/settings.json`: on parse failure it skips Claude registration and leaves the file byte-identical; otherwise it writes `settings.json.peon-poke-bak` before modifying. `config.json` is only created if missing, never overwritten.
-- The uninstaller's `safe_rm` deletes a directory **only** when it contains a valid ownership marker (`.peon-poke-install` for the runtime dir, `.peon-poke-config` for the config dir — each validator rejects the other kind) with a well-formed random install identity. Path shape, basename, and install-looking contents must never authorize deletion. If you change the marker format, change `peon-poke-setup` and `uninstall.sh` in the same commit — they ship together.
-- `install-remote.sh` verifies every fetched file against `SHA256SUMS` **before executing anything**, and hard-fails if the manifest is missing at the install base. The manifest also drives the fetch list — it must include `uninstall.sh` (setup copies it into `~/.peon-poke/` and installs the `peon-poke-uninstall` command) and the universal dist binary. Every manifest entry must pass `valid_payload_path`: no absolute paths, `.`/`..` components, backslashes, odd characters, or top-level names outside the hard-coded payload set (`install.sh`, `peon-poke-setup`, `uninstall.sh`, `poke.sh`, `config.json`, `dist/`, `plugins/`, `adapters/`). Adding a new top-level fetched file means updating that allowlist **and** `scripts/sha256sums.sh` in the same commit.
-- `peon-poke-setup` never writes through symlinks: `~/.claude/settings.json`, installed extension/plugin files, and existing `peon-poke-uninstall` PATH entries that are symlinks are left untouched (the launcher symlink is only ever refreshed when it points exactly at our own target). Claude hook ownership is exact — the precise `bash "…/poke.sh" <category>` shape — so a user's own hook that merely mentions peon-poke survives both setup and uninstall.
+- The uninstaller's `safe_rm` deletes a directory **only** when it contains a valid ownership marker (`.peon-poke-install` for the runtime dir, `.peon-poke-config` for the config dir — each validator rejects the other kind) with a well-formed random install identity. Path shape, basename, and install-looking contents must never authorize deletion. If you change the marker format, change the setup and uninstall halves of `peon-poke` in the same commit — they ship together.
+- `install-remote.sh` verifies every fetched file against `SHA256SUMS` **before executing anything**, and hard-fails if the manifest is missing at the install base. The manifest also drives the fetch list — it must include `uninstall.sh`, the universal dist binary, and the `peon-poke` CLI (setup installs it as `~/.peon-poke/bin/peon-poke`). Every manifest entry must pass `valid_payload_path`: no absolute paths, `.`/`..` components, backslashes, odd characters, or top-level names outside the hard-coded payload set (`install.sh`, `peon-poke`, `peon-poke-setup`, `uninstall.sh`, `poke.sh`, `config.json`, `dist/`, `plugins/`, `adapters/`). Adding a new top-level fetched file means updating that allowlist **and** `scripts/sha256sums.sh` in the same commit.
+- `peon-poke setup` never writes through symlinks: `~/.claude/settings.json`, installed extension/plugin files, and existing `peon-poke`/`peon-poke-uninstall` PATH entries that are symlinks are left untouched (a symlink is only ever refreshed when it points exactly at our own target — current CLI target or the <=0.6.x launcher path). Claude hook ownership is exact — precisely the shapes setup writes (current `…/bin/peon-poke dispatch <category>`, legacy `bash "…/poke.sh" <category>`) — so a user's own hook that merely mentions peon-poke survives both setup and uninstall.
 - `uninstall.sh` restores a user-customized extension from its `.peon-poke-bak` instead of deleting it — their edits are theirs.
 
 ## Build & smoke test
@@ -44,16 +49,7 @@ make                 # clang -O2 -Wall — must stay warning-free
 
 ## Test suite
 
-`tests/run-all.sh` covers the Codex adapter dispatch matrix, the TOML-aware
-setup fixtures (empty / table-ending / existing-notify / malformed /
-quoted-path configs), the uninstaller's destructive-safety guards —
-all against isolated fake HOMEs — plus the installer's manifest
-traversal guards (`test-install-remote.sh`, over a `file://` base) and
-symlink/ownership hardening. Tests that invoke `peon-poke-setup` must
-prepend a fake `~/.local/bin` to `PATH` (never replace PATH — python
-discovery must keep working) so the uninstall-command loop can never
-reach the real `/usr/local/bin`. Run it before any release and after any
-change to `adapters/`, `peon-poke-setup`, `uninstall.sh`, or `install-remote.sh`:
+`tests/run-all.sh` covers the CLI adapter dispatch matrix (codex/gemini/cursor/grok), the TOML-aware setup fixtures (empty / table-ending / existing-notify / malformed / quoted-path configs, legacy-shape migration), the uninstaller's destructive-safety guards — all against isolated fake HOMEs — plus the installer's manifest traversal guards (`test-install-remote.sh`, over a `file://` base) and symlink/ownership hardening. Tests that invoke setup must prepend a fake `~/.local/bin` to `PATH` (never replace PATH — python discovery must keep working) so the PATH-command loop can never reach the real `/usr/local/bin`. Run it before any release and after any change to `peon-poke`, `adapters/`, or `install-remote.sh`:
 
 ```
 bash tests/run-all.sh
@@ -71,7 +67,7 @@ Never ship a binary built without the deployment target — it silently inherits
 
 ## SHA256SUMS
 
-`install-remote.sh` fetches exactly the files listed in `SHA256SUMS` and verifies each one. Whenever you touch `install.sh`, `peon-poke-setup`, `uninstall.sh`, `poke.sh`, `config.json`, `dist/poke-darwin-universal`, `plugins/pi/*.ts`, or `adapters/*.sh`, regenerate and commit the manifest:
+`install-remote.sh` fetches exactly the files listed in `SHA256SUMS` and verifies each one. Whenever you touch `install.sh`, `peon-poke`, `peon-poke-setup`, `uninstall.sh`, `poke.sh`, `config.json`, `dist/poke-darwin-universal`, `plugins/pi/*.ts`, or `adapters/*.sh`, regenerate and commit the manifest:
 
 ```
 scripts/sha256sums.sh
@@ -84,5 +80,7 @@ scripts/release.sh <X.Y.Z> ["commit message"]
 ```
 
 Full flow: preflight checks (clean worktree, local `main` == `origin/main`, tag not taken) → rebuild → refresh `dist/` → regenerate `SHA256SUMS` → bump `VERSION` → stage exactly `VERSION SHA256SUMS dist/poke-darwin-universal` (never `git add -A`) → commit → tag `vX.Y.Z` → push main + tag → `gh release create` → bump the Homebrew tap (`scripts/brew-bump.sh`).
+
+**Tap formula coupling:** the tap's formula `libexec.install`s a hard-coded file list that must include `peon-poke` once a tag containing the Python-CLI layout is released — update `romeobravo/homebrew-tap` `Formula/peon-poke.rb` in the same release session (before `brew-bump`), or brew installs break against the new tag.
 
 **Ordering matters:** the remote installer resolves the latest GitHub release and hard-requires `SHA256SUMS` at that tag. Never push installer/runtime changes to `main` without cutting the release in the same session — remote installs fail until the tag exists.

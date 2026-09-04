@@ -18,10 +18,11 @@ jobs:
         with:
           bun-version: latest
 
-      - name: Syntax-check shell scripts
+      - name: Syntax-check shell + python
         run: |
           bash -n peon-poke-setup uninstall.sh poke.sh install.sh install-remote.sh
           for f in scripts/*.sh adapters/*.sh tests/*.sh; do bash -n "$f"; done
+          python3 -m py_compile peon-poke
 
       - name: Build (must stay warning-free)
         run: |

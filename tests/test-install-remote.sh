@@ -75,6 +75,15 @@ else
   bad "valid manifest path blocked by validation (rc=$RI_RC: $RI_OUT)"
 fi
 
+# --- control: the new CLI payload name is expected (reaches fetch) --------
+run_install 'deadbeef  peon-poke
+'
+if [ "$RI_RC" != 0 ] && printf '%s' "$RI_OUT" | grep -q "failed to fetch peon-poke"; then
+  ok "peon-poke is an accepted payload name (reaches fetch)"
+else
+  bad "peon-poke rejected by payload allowlist (rc=$RI_RC: $RI_OUT)"
+fi
+
 echo "----"
 echo "install-remote: $PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]
