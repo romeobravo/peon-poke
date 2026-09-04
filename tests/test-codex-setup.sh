@@ -20,9 +20,9 @@ bad()  { FAIL=$((FAIL+1)); echo "FAIL - $1"; }
 # dir of ~/.local/bin, ~/bin, /usr/local/bin that is on PATH (first
 # match wins). Prepending a fake ~/.local/bin makes it the winner and
 # leaves the real /usr/local/bin unreachable — while keeping the rest of
-# PATH intact so setup's python/tomllib discovery still works. (An
-# earlier suite version briefly replaced the real global
-# peon-poke-uninstall symlink during a run.)
+# PATH intact so setup's python/tomllib discovery still works. (Prepending
+# a fake dir also keeps the loop away from any real global peon-poke
+# symlink during a run.)
 run_setup() {
   mkdir -p "$H/.local/bin"
   env HOME="$H" PATH="$H/.local/bin:$PATH" "$REPO/peon-poke" setup >>"$TMP/setup.log" 2>&1

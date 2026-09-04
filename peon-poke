@@ -624,6 +624,21 @@ OC_PLUGIN_DIR = os.path.join(
     os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"),
     "opencode", "plugin")
 
+# Non-automatic integrations: no config peon-poke owns, so setup prints
+# the wiring instead of registering. Keys match the setup argument.
+MANUAL_AGENTS = {
+    "gemini": ("Gemini CLI", "~/.gemini/settings.json", (
+        'point hooks at: ~/.peon-poke/adapters/gemini.sh <Event>',
+        'events (argv): SessionStart Stop TurnComplete Error Notification',)),
+    "grok": ("Grok Build", "~/.grok/hooks/peon-poke.json", (
+        '{ "command": "bash ~/.peon-poke/adapters/grok.sh" }',
+        'events arrive as camelCase JSON on stdin',)),
+    "cursor": ("Cursor IDE", "~/.cursor/hooks.json", (
+        '{ "hooks": [{ "event": "stop",',
+        '    "command": "bash ~/.peon-poke/adapters/cursor.sh stop" }] }',)),
+}
+MANUAL_DIRS = {"gemini": "~/.gemini", "grok": "~/.grok", "cursor": "~/.cursor"}
+
 
 def plugin_is_ours(path):
     return any(first_bytes_contains(path, m) for m in PLUGIN_MARKERS)
@@ -677,10 +692,7 @@ LINK_CANDIDATE_DIRS = (os.path.expanduser("~/.local/bin"),
 
 
 def path_link_targets(install):
-    return {  # name -> our symlink target
-        "peon-poke": os.path.join(install, "bin", "peon-poke"),
-        "peon-poke-uninstall": os.path.join(install, "bin", "peon-poke"),
-    }
+    return {"peon-poke": os.path.join(install, "bin", "peon-poke")}
 
 
 def install_path_links(install):
@@ -710,10 +722,7 @@ def install_path_links(install):
             except OSError as e:
                 warn("could not install %s (%s)" % (link, e))
                 continue
-            if name.endswith("uninstall"):
-                info("Uninstall command installed: %s" % link)
-            else:
-                info("Command installed: %s" % link)
+            info("Command installed: %s" % link)
             acted = True
         if acted:
             break
@@ -738,7 +747,19 @@ def uninstall_path_links(install):
 
 # ---------------------------------------------------------------- setup ---
 
-def cmd_setup(_args):
+def print_manual_help(name):
+    title, path, lines = MANUAL_AGENTS[name]
+    info("%s — manual wiring in %s:" % (title, path))
+    for l in lines:
+        print("      " + l)
+
+
+def cmd_setup(args):
+    only = getattr(args, "agent", None)  # None = register every detected agent
+
+    def want(name):
+        return only is None or only == name
+
     src = src_dir()
     # `peon-poke setup` run as the installed CLI (…/bin/peon-poke): the
     # payload is already laid out one level up — heal registrations in
@@ -800,8 +821,13 @@ def cmd_setup(_args):
     else:
         warn("No default config at %s — config not written" % src_cfg)
 
+    if only in MANUAL_AGENTS:
+        print_manual_help(only)
+
     # --- Claude Code hooks ---
-    if os.path.isdir(os.path.expanduser("~/.claude")):
+    if not want("claude"):
+        pass
+    elif os.path.isdir(os.path.expanduser("~/.claude")):
         if register_claude(install):
             info("Claude Code hooks registered (Stop, Notification, SessionStart)")
         else:
@@ -811,7 +837,9 @@ def cmd_setup(_args):
         info("Claude Code not detected (~/.claude) — skipping")
 
     # --- Codex notify ---
-    if os.path.isdir(os.path.expanduser("~/.codex")):
+    if not want("codex"):
+        pass
+    elif os.path.isdir(os.path.expanduser("~/.codex")):
         status = register_codex(install)
         if status == 0:
             info("Codex notify registered in ~/.codex/config.toml")
@@ -826,31 +854,42 @@ def cmd_setup(_args):
         info("Codex not detected (~/.codex) — skipping")
 
     # --- pi / oh-my-pi extensions ---
-    for ext_dir in EXT_DIRS:
+    for name, ext_dir in zip(("pi", "oh-my-pi"), EXT_DIRS):
+        if not want(name):
+            continue
         if os.path.isdir(ext_dir):
             install_owned_file(os.path.join(install, "plugins/pi/poke.ts"),
                                os.path.join(ext_dir, "peon-poke.ts"))
         else:
-            info("%s not detected (%s) — skipping"
-                 % (os.path.basename(os.path.dirname(os.path.dirname(ext_dir))),
-                    ext_dir))
+            info("%s not detected (%s) — skipping" % (name, ext_dir))
 
     # --- OpenCode plugin (auto-discovered, no config edits needed) ---
-    if os.path.isdir(os.path.dirname(OC_PLUGIN_DIR)):
-        os.makedirs(OC_PLUGIN_DIR, exist_ok=True)
-        install_owned_file(os.path.join(install, "plugins/opencode/peon-poke.ts"),
-                           os.path.join(OC_PLUGIN_DIR, "peon-poke.ts"))
-    else:
-        info("OpenCode not detected (%s) — skipping" % OC_PLUGIN_DIR)
+    if want("opencode"):
+        if os.path.isdir(os.path.dirname(OC_PLUGIN_DIR)):
+            os.makedirs(OC_PLUGIN_DIR, exist_ok=True)
+            install_owned_file(os.path.join(install, "plugins/opencode/peon-poke.ts"),
+                               os.path.join(OC_PLUGIN_DIR, "peon-poke.ts"))
+        else:
+            info("OpenCode not detected (%s) — skipping" % OC_PLUGIN_DIR)
 
     # --- PATH commands (guarded, see install_path_links) ---
     install_path_links(install)
 
+    if only is None:
+        for name in MANUAL_AGENTS:
+            if os.path.isdir(os.path.expanduser(MANUAL_DIRS[name])):
+                print()
+                print_manual_help(name)
+        rest = [n for n in MANUAL_AGENTS
+                if not os.path.isdir(os.path.expanduser(MANUAL_DIRS[n]))]
+        if rest:
+            print("  Manual adapters (not detected): %s — peon-poke setup <name> for wiring"
+                  % ", ".join(rest))
+
     print()
     info("%speon-poke installed.%s Patterns live in %s" % (BOLD, RESET, cfg))
-    print("  Uninstall: peon-poke-uninstall (or: peon-poke uninstall --purge)")
-    print("  Manual adapters: gemini, grok, cursor — see README.md")
-    print("  Test: %s           # default pattern: fortune" % os.path.join(install, "bin/poke"))
+    print("  Uninstall: peon-poke uninstall [--purge]")
+    print("  Test: peon-poke play             # default pattern: fortune")
     print("  Status: peon-poke doctor")
     return 0
 
@@ -889,24 +928,52 @@ def safe_rm(directory, marker, kind, what):
     return False
 
 
+MANUAL_UNINSTALL = {
+    "gemini": ("~/.gemini/settings.json",
+               "remove the hook entry pointing at ~/.peon-poke/adapters/gemini.sh"),
+    "grok": ("~/.grok/hooks/peon-poke.json",
+             "delete the file (or remove our entry from it)"),
+    "cursor": ("~/.cursor/hooks.json",
+               "remove hooks entries whose command mentions ~/.peon-poke/adapters/cursor.sh"),
+}
+
+
 def cmd_uninstall(args):
+    only = getattr(args, "agent", None)  # None = remove everything
+
+    def want(name):
+        return only is None or only == name
+
+    if only in MANUAL_UNINSTALL:
+        path, how = MANUAL_UNINSTALL[only]
+        info("%s wiring is manual — in %s: %s" % (only, path, how))
+        return 0
+
     install = install_dir()
 
-    n = unregister_claude()
-    if n > 0:
-        info("Claude Code hooks removed")
-    else:
-        warn("No peon-poke hooks found in Claude settings (left untouched)")
+    if want("claude"):
+        n = unregister_claude()
+        if n > 0:
+            info("Claude Code hooks removed")
+        else:
+            warn("No peon-poke hooks found in Claude settings (left untouched)")
 
-    n = unregister_codex(install)
-    if n > 0:
-        info("Codex notify removed")
-    else:
-        warn("No managed Codex notify found (left untouched)")
+    if want("codex"):
+        n = unregister_codex(install)
+        if n > 0:
+            info("Codex notify removed")
+        else:
+            warn("No managed Codex notify found (left untouched)")
 
-    for f in [os.path.join(d, "peon-poke.ts") for d in EXT_DIRS] + \
-             [os.path.join(OC_PLUGIN_DIR, "peon-poke.ts")]:
-        uninstall_plugin(f)
+    for name, d in zip(("pi", "oh-my-pi"), EXT_DIRS):
+        if want(name):
+            uninstall_plugin(os.path.join(d, "peon-poke.ts"))
+    if want("opencode"):
+        uninstall_plugin(os.path.join(OC_PLUGIN_DIR, "peon-poke.ts"))
+
+    if only is not None:
+        info("Only %s was unregistered — runtime and other agents kept" % only)
+        return 0
 
     uninstall_path_links(install)
 
@@ -1055,9 +1122,19 @@ def build_parser():
         d.set_defaults(func=fn)
 
     d = sub.add_parser("setup", help="install runtime and register hooks")
+    d.add_argument("agent", nargs="?",
+                   choices=("claude", "codex", "pi", "oh-my-pi", "opencode")
+                           + tuple(MANUAL_AGENTS),
+                   help="register one integration, or print wiring for a"
+                        " manual one (default: all detected)")
     d.set_defaults(func=cmd_setup)
 
     d = sub.add_parser("uninstall", help="remove registrations and installed files")
+    d.add_argument("agent", nargs="?",
+                   choices=("claude", "codex", "pi", "oh-my-pi", "opencode")
+                           + tuple(MANUAL_AGENTS),
+                   help="unregister one integration, or explain removal for a"
+                        " manual one (default: everything)")
     d.add_argument("--purge", action="store_true",
                    help="also remove ~/.config/peon-poke/config.json")
     d.set_defaults(func=cmd_uninstall)
@@ -1068,10 +1145,6 @@ def build_parser():
 
 
 def main(argv):
-    # `peon-poke-uninstall` is a symlink to this file: select the uninstall
-    # subcommand by argv[0] so no launcher script is needed.
-    if os.path.basename(argv[0]) == "peon-poke-uninstall":
-        argv = [argv[0], "uninstall"] + argv[1:]
     parser = build_parser()
     args = parser.parse_args(argv[1:])
     if not getattr(args, "func", None):

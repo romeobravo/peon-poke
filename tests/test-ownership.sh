@@ -128,25 +128,16 @@ run_setup
 cmp -s <(printf '// foreign target\n') "$H/elsewhere/target.ts" \
   && ok "setup: extension symlink target untouched" || bad "setup: wrote through extension symlink"
 
-# --------------------------------- uninstall-command symlink ownership ---
+# --------------------------------- command symlink ownership ---
 # setup must never replace a foreign symlink, but must (re)create its own.
-# Both command names (peon-poke, peon-poke-uninstall) point at the one CLI
-# file; the uninstall subcommand is chosen by argv[0].
 fresh; run_setup
-[ -L "$H/.local/bin/peon-poke-uninstall" ] \
-  && [ "$(readlink "$H/.local/bin/peon-poke-uninstall")" = "$H/.peon-poke/bin/peon-poke" ] \
-  && ok "setup: uninstall command symlink points at the CLI" \
-  || bad "setup: uninstall symlink missing or points elsewhere"
 [ -L "$H/.local/bin/peon-poke" ] \
   && [ "$(readlink "$H/.local/bin/peon-poke")" = "$H/.peon-poke/bin/peon-poke" ] \
   && ok "setup: peon-poke command symlink points at the CLI" \
   || bad "setup: peon-poke symlink missing or points elsewhere"
-rm -f "$H/.local/bin/peon-poke-uninstall" "$H/.local/bin/peon-poke"
-ln -s "$H/bin/elsewhere-uninstall" "$H/.local/bin/peon-poke-uninstall"
+rm -f "$H/.local/bin/peon-poke"
 ln -s "$H/bin/elsewhere" "$H/.local/bin/peon-poke"
 run_setup
-[ "$(readlink "$H/.local/bin/peon-poke-uninstall")" = "$H/bin/elsewhere-uninstall" ] \
-  && ok "setup: foreign uninstall symlink not replaced" || bad "setup: replaced foreign uninstall symlink"
 [ "$(readlink "$H/.local/bin/peon-poke")" = "$H/bin/elsewhere" ] \
   && ok "setup: foreign peon-poke symlink not replaced" || bad "setup: replaced foreign peon-poke symlink"
 
@@ -158,9 +149,41 @@ mkdir -p "$H/.local/bin" "$H/bin"
 env HOME="$H" PATH="$H/.local/bin:$H/bin:$PATH" "$REPO/peon-poke" setup >>"$TMP/setup.log" 2>&1
 env HOME="$H" PATH="$H/.local/bin:$H/bin:$PATH" "$REPO/peon-poke" setup >>"$TMP/setup.log" 2>&1
 [ -L "$H/.local/bin/peon-poke" ] && [ ! -e "$H/bin/peon-poke" ] \
-   && [ ! -e "$H/bin/peon-poke-uninstall" ] \
    && ok "setup: PATH links stay in the first candidate dir across re-runs" \
    || bad "setup: PATH links spread to a second candidate dir"
+
+# ------------------------- per-agent setup (setup <agent>) ------------
+# `peon-poke setup pi` installs the runtime but registers ONLY pi: no
+# Claude settings file is created even though ~/.claude exists.
+fresh
+mkdir -p "$H/.claude" "$H/.local/bin" "$H/.pi/agent/extensions"
+env HOME="$H" PATH="$H/.local/bin:$PATH" "$REPO/peon-poke" setup pi >>"$TMP/setup.log" 2>&1
+[ -f "$H/.pi/agent/extensions/peon-poke.ts" ] \
+  && ok "setup pi: pi extension installed" || bad "setup pi: extension missing"
+[ ! -e "$H/.claude/settings.json" ] \
+  && ok "setup pi: other agents untouched" || bad "setup pi: claude registered anyway"
+
+# `peon-poke setup gemini` prints the wiring and installs only the runtime.
+OUT="$(env HOME="$H" PATH="$H/.local/bin:$PATH" "$REPO/peon-poke" setup gemini 2>&1)"
+printf '%s' "$OUT" | grep -q "adapters/gemini.sh" \
+  && ok "setup gemini: wiring displayed" || bad "setup gemini: no wiring in output"
+[ ! -e "$H/.claude/settings.json" ] \
+  && ok "setup gemini: nothing auto-registered" || bad "setup gemini: registered something"
+
+# `peon-poke uninstall pi` removes only that integration: extension gone,
+# runtime + other registrations kept.
+env HOME="$H" PATH="$H/.local/bin:$PATH" "$REPO/peon-poke" uninstall pi >>"$TMP/un.log" 2>&1
+[ ! -e "$H/.pi/agent/extensions/peon-poke.ts" ] \
+  && ok "uninstall pi: extension removed" || bad "uninstall pi: extension kept"
+[ -d "$H/.peon-poke/bin" ] \
+  && ok "uninstall pi: runtime kept" || bad "uninstall pi: runtime deleted"
+
+# `peon-poke uninstall gemini` explains manual removal, removes nothing.
+OUT="$(env HOME="$H" PATH="$H/.local/bin:$PATH" "$REPO/peon-poke" uninstall gemini 2>&1)"
+printf '%s' "$OUT" | grep -q "gemini.sh" \
+  && ok "uninstall gemini: removal explained" || bad "uninstall gemini: no explanation"
+[ -d "$H/.peon-poke/bin" ] \
+  && ok "uninstall gemini: nothing deleted" || bad "uninstall gemini: deleted something"
 
 # --------------- setup re-run from the installed CLI (self-heal) -------
 # The documented healing path: `peon-poke setup` via the installed CLI
