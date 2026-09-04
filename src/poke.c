@@ -177,8 +177,7 @@ static const struct named_pattern NAMED[] = {
 #define GAP_MAX_MS 10000
 
 /* fire one pulse per gap, plus a final pulse; NULL spec = single pulse
- * (also protects NAMED entries with gaps == NULL if the boop special
- * case in main() ever moves) */
+ * (the boop NAMED entry rides this path) */
 static void play_sequence(mt_actuator_ref act, int id, const char *spec)
 {
     if (!spec) {
@@ -298,10 +297,7 @@ int main(int argc, char **argv)
     snprintf(spec, sizeof spec, "%s", argc > 1 ? argv[1] : "fortune");
     clean_spec(spec);
 
-    if (strcmp(spec, "boop") == 0) {
-        int rc = MTActuatorActuate(act, id, 0, NULL, NULL);
-        msg("pulse (single) ... ret %d\n", rc);
-    } else if (strchr(spec, ',')) {
+    if (strchr(spec, ',')) {
         play_sequence(act, id, spec);
     } else {
         const struct named_pattern *np = NULL;

@@ -24,6 +24,7 @@
 # block the host agent.
 import argparse
 import contextlib
+import filecmp
 import json
 import os
 import re
@@ -617,7 +618,7 @@ def register_codex(install):
 
 def unregister_codex(install=None):
     """Remove only the managed notify lines we added. Returns count of
-    managed blocks/lines removed, or -1 when the file was left untouched."""
+    managed lines removed, or -1 when the file was left untouched."""
     path = codex_toml_path()
     if not os.path.isfile(path):
         return 0
@@ -629,27 +630,8 @@ def unregister_codex(install=None):
         plain_warn("peon-poke: cannot read %s (%s) — left untouched" % (path, e))
         return -1
 
-    out, seams, i, removed = [], [], 0, 0
-    while i < len(lines):
-        if lines[i].strip() == CODEX_MARKER and i + 1 < len(lines) \
-                and is_our_notify(lines[i + 1], escapes):
-            seams.append(len(out))
-            i += 2
-            removed += 1
-            continue
-        if is_our_notify(lines[i], escapes):
-            seams.append(len(out))
-            i += 1
-            removed += 1
-            continue
-        out.append(lines[i])
-        i += 1
-    for s in sorted(set(seams), reverse=True):
-        if 0 < s <= len(out) and out[s - 1].strip() == "":
-            del out[s - 1]
-        elif s < len(out) and out[s].strip() == "":
-            del out[s]
-
+    out = codex_strip_managed(lines, escapes)
+    removed = len(lines) - len(out)
     if not removed:
         if any("peon-poke" in l for l in lines):
             plain_warn("peon-poke: mentions of peon-poke found in %s but no"
@@ -701,23 +683,10 @@ def install_owned_file(src, dest):
         if not plugin_is_ours(dest):
             warn("%s exists but is not recognized as ours — left untouched" % dest)
             return
-        if not os.path.exists(dest + ".peon-poke-bak") \
-                and not os.path.islink(dest + ".peon-poke-bak") \
-                and not filecmp_eq(dest, src):
-            shutil.copy2(dest, dest + ".peon-poke-bak")
+        if not filecmp.cmp(dest, src, shallow=False) and stable_backup(dest):
             info("Existing file saved to %s.peon-poke-bak (modified copy preserved)" % dest)
     shutil.copy2(src, dest)
     info("Installed: %s" % dest)
-
-
-def filecmp_eq(a, b):
-    try:
-        if os.path.getsize(a) != os.path.getsize(b):
-            return False
-        with open(a, "rb") as fa, open(b, "rb") as fb:
-            return fa.read() == fb.read()
-    except OSError:
-        return False
 
 
 def uninstall_plugin(path):
