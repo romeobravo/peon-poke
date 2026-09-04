@@ -1,6 +1,6 @@
 /**
  * peon-poke — pi (and oh-my-pi) extension
- * Managed by peon-poke-setup: reinstalling peon-poke refreshes this file.
+ * Managed by peon-poke setup: reinstalling peon-poke refreshes this file.
  * Buzzes the trackpad when the agent is ready for input.
  *
  * Routes through the peon-poke CLI so pattern config stays centralized

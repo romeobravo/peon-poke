@@ -1,7 +1,7 @@
 #!/bin/bash
 # peon-poke installer (from a repo clone): builds from source — or falls
 # back to the precompiled universal binary (macOS 12+, arm64 + x86_64) in
-# dist/ — then runs peon-poke-setup.
+# dist/ — then runs `peon-poke setup`.
 #
 # Usage: bash install.sh
 set -euo pipefail
@@ -22,4 +22,4 @@ else
   exit 1
 fi
 
-exec bash "$REPO_DIR/peon-poke-setup"
+exec "$REPO_DIR/peon-poke" setup

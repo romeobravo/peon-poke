@@ -23,8 +23,8 @@ bad() { FAIL=$((FAIL+1)); echo "FAIL - $1"; }
 # loop takes the first writable on-PATH dir, so the fake one wins and
 # the real /usr/local/bin is never reached — the rest of PATH (python
 # discovery) stays intact.
-run_setup()    { mkdir -p "$H/.local/bin"; env HOME="$H" PATH="$H/.local/bin:$PATH" bash "$REPO/peon-poke-setup" >>"$TMP/setup.log" 2>&1; }
-run_uninstall(){ env HOME="$H" POKE_DIR="$H/.peon-poke" bash "$REPO/uninstall.sh" "$@" >>"$TMP/uninstall.log" 2>&1; }
+run_setup()    { mkdir -p "$H/.local/bin"; env HOME="$H" PATH="$H/.local/bin:$PATH" "$REPO/peon-poke" setup >>"$TMP/setup.log" 2>&1; }
+run_uninstall(){ env HOME="$H" POKE_DIR="$H/.peon-poke" "$REPO/peon-poke" uninstall "$@" >>"$TMP/uninstall.log" 2>&1; }
 fresh() { rm -rf "$H"; mkdir -p "$H/.codex" "$H/.pi/agent/extensions" "$H/.config/opencode"; }
 
 # ------------------------------------------------- foreign extension file ---
@@ -48,6 +48,7 @@ fresh
 cat > "$H/.pi/agent/extensions/peon-poke.ts" <<'EOF'
 /**
  * peon-poke — pi (and oh-my-pi) extension
+ * Managed by peon-poke setup: reinstalling peon-poke refreshes this file.
  * (user-tweaked copy: louder pattern)
  */
 export default function (pi: { on: (e: string, f: () => void) => void }) {
@@ -55,7 +56,7 @@ export default function (pi: { on: (e: string, f: () => void) => void }) {
 }
 EOF
 run_setup
-head -n 3 "$H/.pi/agent/extensions/peon-poke.ts" | grep -q "Managed by peon-poke-setup" \
+head -n 3 "$H/.pi/agent/extensions/peon-poke.ts" | grep -q "Managed by peon-poke" \
   && ok "setup: recognized-modified extension refreshed to current" \
   || bad "setup: our extension not refreshed"
 [ -f "$H/.pi/agent/extensions/peon-poke.ts.peon-poke-bak" ] \
@@ -154,8 +155,8 @@ run_setup
 # re-run must not "helpfully" add them to the next candidate dir too.
 fresh
 mkdir -p "$H/.local/bin" "$H/bin"
-env HOME="$H" PATH="$H/.local/bin:$H/bin:$PATH" bash "$REPO/peon-poke-setup" >>"$TMP/setup.log" 2>&1
-env HOME="$H" PATH="$H/.local/bin:$H/bin:$PATH" bash "$REPO/peon-poke-setup" >>"$TMP/setup.log" 2>&1
+env HOME="$H" PATH="$H/.local/bin:$H/bin:$PATH" "$REPO/peon-poke" setup >>"$TMP/setup.log" 2>&1
+env HOME="$H" PATH="$H/.local/bin:$H/bin:$PATH" "$REPO/peon-poke" setup >>"$TMP/setup.log" 2>&1
 [ -L "$H/.local/bin/peon-poke" ] && [ ! -e "$H/bin/peon-poke" ] \
    && [ ! -e "$H/bin/peon-poke-uninstall" ] \
    && ok "setup: PATH links stay in the first candidate dir across re-runs" \
@@ -194,12 +195,12 @@ esac
 fresh
 mkdir -p "$H/.claude" "$H/.local/bin"
 SPACED="$H/My Tools/.peon-poke"
-env HOME="$H" POKE_DIR="$SPACED" PATH="$H/.local/bin:$PATH" bash "$REPO/peon-poke-setup" >>"$TMP/setup.log" 2>&1
-env HOME="$H" POKE_DIR="$SPACED" PATH="$H/.local/bin:$PATH" bash "$REPO/peon-poke-setup" >>"$TMP/setup.log" 2>&1
+env HOME="$H" POKE_DIR="$SPACED" PATH="$H/.local/bin:$PATH" "$REPO/peon-poke" setup >>"$TMP/setup.log" 2>&1
+env HOME="$H" POKE_DIR="$SPACED" PATH="$H/.local/bin:$PATH" "$REPO/peon-poke" setup >>"$TMP/setup.log" 2>&1
 n="$(grep -c ' dispatch ' "$H/.claude/settings.json")"
 [ "$n" = 3 ] && ok "spaced POKE_DIR: re-run does not duplicate hooks" \
   || bad "spaced POKE_DIR: $n hook commands after two setups (want 3)"
-env HOME="$H" POKE_DIR="$SPACED" bash "$REPO/uninstall.sh" >>"$TMP/uninstall.log" 2>&1
+env HOME="$H" POKE_DIR="$SPACED" "$REPO/peon-poke" uninstall >>"$TMP/uninstall.log" 2>&1
 ! grep -q ' dispatch ' "$H/.claude/settings.json" \
   && ok "spaced POKE_DIR: uninstall removes all our hooks" \
   || bad "spaced POKE_DIR: uninstall left our hooks behind"
@@ -232,6 +233,7 @@ fresh
 cat > "$H/.pi/agent/extensions/peon-poke.ts" <<'EOF'
 /**
  * peon-poke — pi (and oh-my-pi) extension
+ * Managed by peon-poke setup: reinstalling peon-poke refreshes this file.
  * (user-tweaked copy)
  */
 export default function (pi: { on: (e: string, f: () => void) => void }) {
@@ -267,7 +269,7 @@ run_uninstall
 # ours: installed by setup, removed by uninstall (dir kept — opencode owns it)
 fresh
 run_setup
-head -n 3 "$H/.config/opencode/plugin/peon-poke.ts" | grep -q "Managed by peon-poke-setup" \
+head -n 3 "$H/.config/opencode/plugin/peon-poke.ts" | grep -q "Managed by peon-poke" \
   && ok "setup: opencode plugin installed with marker" || bad "setup: opencode plugin not installed"
 run_uninstall
 [ ! -e "$H/.config/opencode/plugin/peon-poke.ts" ] \
@@ -284,7 +286,7 @@ grep -q "OpenCode not detected" "$TMP/setup.log" \
 
 # XDG_CONFIG_HOME honored
 fresh; rm -rf "$H/.config/opencode"; mkdir -p "$H/xdg/opencode" "$H/.local/bin"
-env HOME="$H" XDG_CONFIG_HOME="$H/xdg" PATH="$H/.local/bin:$PATH" bash "$REPO/peon-poke-setup" >>"$TMP/setup.log" 2>&1
+env HOME="$H" XDG_CONFIG_HOME="$H/xdg" PATH="$H/.local/bin:$PATH" "$REPO/peon-poke" setup >>"$TMP/setup.log" 2>&1
 [ -f "$H/xdg/opencode/plugin/peon-poke.ts" ] \
   && ok "setup: XDG_CONFIG_HOME honored for opencode plugin" || bad "XDG_CONFIG_HOME not honored"
 

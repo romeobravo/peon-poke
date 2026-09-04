@@ -1,8 +1,7 @@
 #!/bin/bash
 # test-codex-setup.sh — TOML fixtures for peon-poke setup's Codex
-# registration (peon-poke-setup is a shim to `peon-poke setup`): empty,
+# config.toml notify registration: empty,
 # table-ending, existing top-level notify, malformed, idempotency, paths
-# with spaces/quotes, and legacy-shape migration.
 #
 # Uses a fully isolated HOME; nothing here touches the real ~/.codex.
 set -u
@@ -26,7 +25,7 @@ bad()  { FAIL=$((FAIL+1)); echo "FAIL - $1"; }
 # peon-poke-uninstall symlink during a run.)
 run_setup() {
   mkdir -p "$H/.local/bin"
-  env HOME="$H" PATH="$H/.local/bin:$PATH" bash "$REPO/peon-poke-setup" >>"$TMP/setup.log" 2>&1
+  env HOME="$H" PATH="$H/.local/bin:$PATH" "$REPO/peon-poke" setup >>"$TMP/setup.log" 2>&1
 }
 
 # a python with tomllib if any exists (python3 may be < 3.11 on macOS)
@@ -141,7 +140,7 @@ ls "$H/.codex/" | grep -q '^\.config\.toml\.' \
 # -------------------------------------------------- quoted/spacey paths ---
 WEIRD="$TMP/home with space and \"quote\""
 rm -rf "$WEIRD"; mkdir -p "$WEIRD/.codex" "$WEIRD/.local/bin"
-env HOME="$WEIRD" PATH="$WEIRD/.local/bin:$PATH" bash "$REPO/peon-poke-setup" >>"$TMP/setup.log" 2>&1
+env HOME="$WEIRD" PATH="$WEIRD/.local/bin:$PATH" "$REPO/peon-poke" setup >>"$TMP/setup.log" 2>&1
 CFG="$WEIRD/.codex/config.toml"
 if [ -n "$TOML_PY" ]; then
   "$TOML_PY" - "$CFG" "$WEIRD" > "$TMP/weird.out" <<'PY'
@@ -171,10 +170,10 @@ for i in 1 2 3 4 5 6 7 8 9 10; do [ -s "$TMP/weird-fired" ] && break; sleep 0.1;
   && ok "quoted/space path: CLI runs from quoted path and dispatches" \
   || bad "quoted/space path: CLI dispatch failed ($(cat "$TMP/weird-fired" 2>/dev/null))"
 
-# --------------------------------------------- old-buggy registrations ---
-# Setups <= v0.4.4 appended the block at EOF without TOML awareness.
+# ------------------------------------- mis-placed managed registration ---
+# A managed block that landed after a table header (hand-moved, or written
+# there by an old setup) must be re-registered at top level.
 
-# (a) after a table header: must be MOVED to top level
 cat > "$TMP/initial.toml" <<EOF
 model = "gpt-5"
 
@@ -182,7 +181,7 @@ model = "gpt-5"
 notifications = true
 
 # peon-poke (managed — remove to uninstall)
-notify = ["bash", "$H/.peon-poke/adapters/codex.sh"]
+notify = ["$H/.peon-poke/bin/peon-poke", "codex"]
 EOF
 scenario; run_setup
 [ "$(toml_notify_toplevel "$H/.codex/config.toml")" = "yes" ] \
@@ -199,41 +198,6 @@ PY
   R="$(cat "$TMP/tui.out")"
   [ "$R" = "yes" ] && ok "migration: [tui] no longer contains notify" || bad "migration: [tui] still contains notify"
 fi
-
-# (b) duplicated after a user's top-level notify: must heal to valid TOML
-cat > "$TMP/initial.toml" <<EOF
-notify = ["python3", "-m", "my_notifier"]
-model = "gpt-5"
-
-# peon-poke (managed — remove to uninstall)
-notify = ["bash", "$H/.peon-poke/adapters/codex.sh"]
-EOF
-scenario; run_setup
-[ "$(toml_notify_toplevel "$H/.codex/config.toml")" = "yes" ] \
-  && ok "migration: duplicate-key config healed to exactly one notify" \
-  || bad "migration: still broken ($(toml_notify_toplevel "$H/.codex/config.toml"))"
-grep -q 'my_notifier' "$H/.codex/config.toml" \
-  && ok "migration: user notifier survived the heal" || bad "migration: user notifier lost"
-grep -q 'peon-poke/adapters/codex.sh' "$H/.codex/config.toml" \
-  && bad "migration: our stray duplicate remains" || ok "migration: our stray duplicate removed"
-
-# --------------------------------------------- legacy well-placed registration ---
-# A <=0.6.x registration (marker + bash/adapter notify at top level) must
-# be upgraded in place to the CLI shape, with no strays left.
-cat > "$TMP/initial.toml" <<EOF
-model = "gpt-5"
-
-# peon-poke (managed — remove to uninstall)
-notify = ["bash", "$H/.peon-poke/adapters/codex.sh"]
-EOF
-scenario; run_setup
-[ "$(toml_notify_toplevel "$H/.codex/config.toml")" = "yes" ] \
-  && ok "legacy registration: exactly one notify after upgrade" \
-  || bad "legacy registration: $(toml_notify_toplevel "$H/.codex/config.toml")"
-grep -q 'notify = \[".*bin/peon-poke", "codex"\]' "$H/.codex/config.toml" \
-  && ok "legacy registration: upgraded to CLI shape" || bad "legacy registration: CLI shape missing"
-grep -q 'adapters/codex.sh' "$H/.codex/config.toml" \
-  && bad "legacy registration: old adapter shape left behind" || ok "legacy registration: old shape gone"
 
 # --------------------------------------- comment-spoofed foreign notify ---
 # Ownership must be decided on the comment-stripped assignment: a

@@ -1,6 +1,6 @@
 /**
  * peon-poke — OpenCode plugin
- * Managed by peon-poke-setup: reinstalling peon-poke refreshes this file.
+ * Managed by peon-poke setup: reinstalling peon-poke refreshes this file.
  *
  * Auto-discovered from ~/.config/opencode/plugin/ (no config edits
  * needed). opencode scans both plugin/ and plugins/ — verified against

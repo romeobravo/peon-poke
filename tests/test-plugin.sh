@@ -50,6 +50,11 @@ else
 fi
 echo "$OUT" | grep -q "registered: agent_settled,ui_prompt_start" \
   && ok "registers agent_settled + ui_prompt_start" || bad "event registration: $OUT"
+# the dispatcher is spawned detached — poll for both writes before judging
+for _ in $(seq 1 50); do
+  [ "$(wc -l < "$TMP/fired" 2>/dev/null || echo 0)" -ge 2 ] && break
+  sleep 0.1
+done
 sort "$TMP/fired" 2>/dev/null | tr '\n' ' ' | grep -q "input.required task.complete" \
   && ok "agent_settled -> task.complete, ui_prompt_start -> input.required" \
   || bad "dispatch categories: $(cat "$TMP/fired" 2>/dev/null)"

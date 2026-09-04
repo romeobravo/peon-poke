@@ -1,11 +1,9 @@
 #!/bin/bash
-# test-uninstall.sh — destructive-safety tests for peon-poke uninstall
-# (uninstall.sh is a shim to `peon-poke uninstall`) using a fake HOME
+# test-uninstall.sh — destructive-safety tests for `peon-poke uninstall`
+# using a fake HOME
 # (never touches the real one). Covers: exact managed-block removal (CLI
-# shape AND legacy bash/adapter shape), legacy Claude hook removal,
-# preservation of user notes/values, rm -rf guards (ownership markers
-# required — name/shape alone never authorizes), --purge, and the
-# override escape hatch.
+# shape), Claude hook removal, preservation of user notes/values, rm -rf
+# guards (ownership markers required — name/shape alone never authorizes),
 set -u
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/.." && pwd)"
@@ -19,7 +17,7 @@ TEST_ID="11111111-2222-3333-4444-555555555555"
 ok()  { PASS=$((PASS+1)); echo "ok   - $1"; }
 bad() { FAIL=$((FAIL+1)); echo "FAIL - $1"; }
 
-run_uninstall() { env HOME="$H" POKE_DIR="$H/.peon-poke" bash "$REPO/uninstall.sh" "$@" ; }
+run_uninstall() { env HOME="$H" POKE_DIR="$H/.peon-poke" "$REPO/peon-poke" uninstall "$@" ; }
 
 stamp() { # stamp <dir> <marker> <kind> — write a marker like peon-poke-setup's
   mkdir -p "$1"
@@ -71,31 +69,16 @@ printf 'model = "gpt-5"\n\n[tui]\nnotifications = true\n' | cmp -s - "$H/.codex/
 [ -f "$H/.codex/config.toml.peon-poke-bak" ] \
   && ok "backup written before codex config rewrite" || bad "no backup for codex rewrite"
 
-# legacy shape (<=0.6.x wrote notify = ["bash", .../adapters/codex.sh])
-cat > "$TMP/legacy.toml" <<'EOF'
-model = "gpt-5"
-
-# peon-poke (managed — remove to uninstall)
-notify = ["bash", "PLACEHOLDER/adapters/codex.sh"]
-
-[tui]
-notifications = true
-EOF
-sed "s|PLACEHOLDER|$H/.peon-poke|" "$TMP/legacy.toml" > "$TMP/legacy-filled.toml"
-fresh "$TMP/legacy-filled.toml"; run_uninstall >/dev/null 2>&1
-printf 'model = "gpt-5"\n\n[tui]\nnotifications = true\n' | cmp -s - "$H/.codex/config.toml" \
-  && ok "managed block (legacy adapter shape) removed" || { bad "legacy-shape removal changed file"; cat "$H/.codex/config.toml"; }
-
-# ------------------------------------------- legacy Claude hook removal ---
+# ------------------------------------------- Claude hook removal ---
 rm -rf "$H"; mkdir -p "$H/.claude" "$H/.peon-poke/bin"
 cat > "$H/.claude/settings.json" <<EOF
 {"hooks": {"Stop": [
-  {"matcher": "", "hooks": [{"type": "command", "command": "bash $H/.peon-poke/poke.sh task.complete"}]},
+  {"matcher": "", "hooks": [{"type": "command", "command": "$H/.peon-poke/bin/peon-poke dispatch task.complete"}]},
   {"matcher": "", "hooks": [{"type": "command", "command": "bash $H/tools/mine.sh"}]}
 ]}}
 EOF
 run_uninstall >/dev/null 2>&1
-python3 - "$H/.claude/settings.json" "$H" <<'PY' 2>/dev/null && ok "legacy Claude hook removed, user hook kept" || bad "legacy Claude hook handling wrong"
+python3 - "$H/.claude/settings.json" "$H" <<'PY' 2>/dev/null && ok "our Claude hook removed, user hook kept" || bad "Claude hook removal wrong"
 import json, sys
 hooks = json.load(open(sys.argv[1]))["hooks"]["Stop"]
 assert len(hooks) == 1 and hooks[0]["hooks"][0]["command"] == "bash " + sys.argv[2] + "/tools/mine.sh", hooks
@@ -103,18 +86,18 @@ PY
 
 # --------------------------------------------------------- POKE_DIR=$HOME ---
 fresh
-OUT="$(env HOME="$H" POKE_DIR="$H" bash "$REPO/uninstall.sh" 2>&1 || true)"
+OUT="$(env HOME="$H" POKE_DIR="$H" "$REPO/peon-poke" uninstall 2>&1 || true)"
 echo "$OUT" | grep -q "refusing to remove" && ok "POKE_DIR=\$HOME refused" || bad "POKE_DIR=\$HOME not refused"
 [ -d "$H/.codex" ] && ok "HOME survived POKE_DIR=\$HOME" || bad "HOME was deleted!"
 
 # ------------------------------------------------------- canonical $HOME ---
 # /tmp -> /private/tmp symlink must not bypass the refuse-list
-OUT="$(env HOME="$H" POKE_DIR="${TMP}/home" bash "$REPO/uninstall.sh" 2>&1 || true)"
+OUT="$(env HOME="$H" POKE_DIR="${TMP}/home" "$REPO/peon-poke" uninstall 2>&1 || true)"
 echo "$OUT" | grep -q "refusing" && ok "canonicalized \$HOME refused" || bad "canonical \$HOME not refused"
 
 # -------------------------------------------------------- unrelated dir ---
 mkdir -p "$H/precious"; echo data > "$H/precious/file"
-OUT="$(env HOME="$H" POKE_DIR="$H/precious" bash "$REPO/uninstall.sh" 2>&1 || true)"
+OUT="$(env HOME="$H" POKE_DIR="$H/precious" "$REPO/peon-poke" uninstall 2>&1 || true)"
 echo "$OUT" | grep -q "refusing" && ok "non-install dir refused" || bad "non-install dir not refused"
 [ -f "$H/precious/file" ] && ok "non-install dir contents survived" || bad "non-install dir deleted"
 
@@ -122,14 +105,14 @@ echo "$OUT" | grep -q "refusing" && ok "non-install dir refused" || bad "non-ins
 # Basename-only authorization must be gone: a path ending in /peon-poke
 # with no ownership marker is somebody's data, not ours.
 mkdir -p "$H/precious/peon-poke"; echo "only copy" > "$H/precious/peon-poke/only-copy.txt"
-OUT="$(env HOME="$H" POKE_DIR="$H/precious/peon-poke" bash "$REPO/uninstall.sh" 2>&1 || true)"
+OUT="$(env HOME="$H" POKE_DIR="$H/precious/peon-poke" "$REPO/peon-poke" uninstall 2>&1 || true)"
 echo "$OUT" | grep -q "refusing to remove" \
   && ok "unrelated dir ending in /peon-poke refused" || bad "basename-only authorization still present"
 [ -f "$H/precious/peon-poke/only-copy.txt" ] \
   && ok "unrelated peon-poke-named dir survived" || bad "unrelated peon-poke-named dir deleted"
 
 # same attack via --purge + XDG_CONFIG_HOME
-OUT="$(env HOME="$H" XDG_CONFIG_HOME="$H/precious" POKE_DIR="$H/.peon-poke" bash "$REPO/uninstall.sh" --purge 2>&1 || true)"
+OUT="$(env HOME="$H" XDG_CONFIG_HOME="$H/precious" POKE_DIR="$H/.peon-poke" "$REPO/peon-poke" uninstall --purge 2>&1 || true)"
 echo "$OUT" | grep -q "refusing to remove" \
   && ok "--purge: unrelated dir ending in /peon-poke refused" || bad "--purge: basename-only authorization still present"
 [ -f "$H/precious/peon-poke/only-copy.txt" ] \
@@ -139,27 +122,27 @@ echo "$OUT" | grep -q "refusing to remove" \
 # Contents that look like an install (poke.sh/bin/adapters) without a
 # marker no longer authorize deletion — the marker is the only proof.
 rm -rf "$H/legacy"; mkdir -p "$H/legacy/bin" "$H/legacy/adapters"; echo "#!/bin/bash" > "$H/legacy/poke.sh"
-OUT="$(env HOME="$H" POKE_DIR="$H/legacy" bash "$REPO/uninstall.sh" 2>&1 || true)"
+OUT="$(env HOME="$H" POKE_DIR="$H/legacy" "$REPO/peon-poke" uninstall 2>&1 || true)"
 echo "$OUT" | grep -q "refusing to remove" \
   && ok "install-shaped dir without marker refused" || bad "structural heuristic still authorizes"
 [ -d "$H/legacy" ] && ok "unmarked install-shaped dir survived" || bad "unmarked install-shaped dir deleted"
 
 # ------------------------------------------- marker must be genuine -------
 rm -rf "$H/phony"; mkdir -p "$H/phony/.peon-poke"; echo hello > "$H/phony/.peon-poke/.peon-poke-install"
-OUT="$(env HOME="$H" POKE_DIR="$H/phony/.peon-poke" bash "$REPO/uninstall.sh" 2>&1 || true)"
+OUT="$(env HOME="$H" POKE_DIR="$H/phony/.peon-poke" "$REPO/peon-poke" uninstall 2>&1 || true)"
 echo "$OUT" | grep -q "refusing to remove" \
   && ok "garbage-marker dir refused" || bad "garbage marker accepted"
 [ -d "$H/phony/.peon-poke" ] && ok "garbage-marker dir survived" || bad "garbage-marker dir deleted"
 
 # wrong kind: a config marker must not authorize the runtime dir (and vice versa)
 rm -rf "$H/swapped"; stamp "$H/swapped/.peon-poke" ".peon-poke-config" config
-OUT="$(env HOME="$H" POKE_DIR="$H/swapped/.peon-poke" bash "$REPO/uninstall.sh" 2>&1 || true)"
+OUT="$(env HOME="$H" POKE_DIR="$H/swapped/.peon-poke" "$REPO/peon-poke" uninstall 2>&1 || true)"
 echo "$OUT" | grep -q "refusing to remove" \
   && ok "cross-kind marker refused" || bad "cross-kind marker accepted"
 [ -d "$H/swapped/.peon-poke" ] && ok "cross-kind marker dir survived" || bad "cross-kind marker dir deleted"
 
 # -------------------------------------------------- override escape hatch ---
-OUT="$(env HOME="$H" POKE_DIR="$H/precious" POKE_UNSAFE_RM=1 bash "$REPO/uninstall.sh" 2>&1 || true)"
+OUT="$(env HOME="$H" POKE_DIR="$H/precious" POKE_UNSAFE_RM=1 "$REPO/peon-poke" uninstall 2>&1 || true)"
 [ ! -d "$H/precious" ] && ok "POKE_UNSAFE_RM=1 override removes" || bad "override did not remove"
 
 # ------------------------------------------------------------ --purge -----
@@ -191,9 +174,9 @@ run_uninstall >/dev/null 2>&1
 # A fake ~/.local/bin is prepended to PATH so setup's uninstall-command
 # loop never reaches the real /usr/local/bin.
 rm -rf "$H"; mkdir -p "$H/.codex" "$H/.pi/agent/extensions" "$H/.local/bin"
-env HOME="$H" PATH="$H/.local/bin:$PATH" bash "$REPO/peon-poke-setup" >/dev/null 2>&1
+env HOME="$H" PATH="$H/.local/bin:$PATH" "$REPO/peon-poke" setup >/dev/null 2>&1
 ID1="$(sed -n 's/^install_id=//p' "$H/.peon-poke/.peon-poke-install")"
-env HOME="$H" PATH="$H/.local/bin:$PATH" bash "$REPO/peon-poke-setup" >/dev/null 2>&1
+env HOME="$H" PATH="$H/.local/bin:$PATH" "$REPO/peon-poke" setup >/dev/null 2>&1
 ID2="$(sed -n 's/^install_id=//p' "$H/.peon-poke/.peon-poke-install")"
 [ -n "$ID1" ] && [ "$ID1" = "$ID2" ] \
   && ok "setup: install identity stable across re-runs" || bad "setup: identity churned or empty"

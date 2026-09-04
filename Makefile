@@ -27,7 +27,5 @@ dist: dist/poke-darwin-universal
 print-min:
 	@echo $(MIN_MACOS)
 
-install: all
-
 clean:
 	rm -rf bin

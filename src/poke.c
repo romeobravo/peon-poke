@@ -94,7 +94,7 @@ static void die(const char *msg)
  * MultitouchSupport dies with SIGBUS inside MTActuatorCreate/Open while
  * touching revoked IOKit mappings. Catch the fault, say something human,
  * and keep the exit-0 invariant. write() only — fprintf is not
- * async-signal-safe. Hook mode never sees this: poke.sh redirects stderr.
+ * async-signal-safe. Hook mode never sees this: the CLI redirects stderr.
  */
 static void crash_guard(int sig)
 {

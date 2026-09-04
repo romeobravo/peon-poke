@@ -41,7 +41,7 @@ valid_payload_path() {
   case "$p" in
     /*|*\\*|""|"."|"..") return 1 ;;
     *[!A-Za-z0-9._/-]*) return 1 ;;
-    install.sh|peon-poke|peon-poke-setup|uninstall.sh|poke.sh|config.json|dist/*|plugins/*|adapters/*) ;;
+    install.sh|peon-poke|config.json|dist/*|plugins/*|adapters/*) ;;
     *) return 1 ;;
   esac
   local IFS='/'
@@ -73,5 +73,5 @@ SUMS_OUT="$(cd "$TMP" && shasum -a 256 -c SHA256SUMS 2>&1)" || {
 }
 echo "> Integrity verified: $(printf '%s\n' "$SUMS_OUT" | grep -c ': OK$') files (sha256)"
 
-chmod +x "$TMP/dist/poke-darwin-universal" "$TMP/peon-poke" "$TMP/peon-poke-setup" "$TMP/uninstall.sh"
+chmod +x "$TMP/dist/poke-darwin-universal" "$TMP/peon-poke"
 bash "$TMP/install.sh"

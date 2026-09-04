@@ -1,5 +1,5 @@
 #!/bin/bash
-# test-dispatch.sh — pattern dispatch through the Python CLI (poke.sh
+# test-dispatch.sh — pattern dispatch through the Python CLI (dispatch
 # execs `peon-poke dispatch`; malformed-config cases exercise the CLI
 # directly, which is the shape hooks invoke).
 # Config patterns are single spec strings ("[60, 120, 40]", "boop"); the
@@ -29,7 +29,7 @@ dispatch() { # dispatch <token> [expect-fire:1|0]  (leaves result in $TMP/log)
   local tok="$1" expect="${2:-1}" i
   : > "$TMP/log"
   ( cd "$TMP/cwd" && env HOME="$H" POKE_BIN="$TMP/stub-poke" \
-      bash "$REPO/poke.sh" "$tok" ) >/dev/null 2>&1
+      "$REPO/peon-poke" dispatch "$tok" ) >/dev/null 2>&1
   # the real dispatcher fires detached — poll for the stub to land
   for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
     if [ "$expect" = 1 ] && [ -s "$TMP/log" ]; then break; fi
