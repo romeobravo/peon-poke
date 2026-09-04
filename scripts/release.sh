@@ -46,16 +46,19 @@ make >/dev/null
 make dist >/dev/null
 echo "==> dist/poke-darwin-universal refreshed (arm64 + x86_64, min macOS $(make -s print-min))"
 
+echo "$VERSION" > VERSION
+# keep the CLI's baked-in fallback in sync (used when no VERSION file sits
+# next to the installed CLI) — must happen BEFORE the manifest regen
+sed -i '' "s/^__version__ = \".*\"/__version__ = \"$VERSION\"/" peon-poke
+
 bash scripts/sha256sums.sh >/dev/null
 echo "==> SHA256SUMS regenerated"
-
-echo "$VERSION" > VERSION
 
 # --- commit, tag, push ---
 # Stage exactly what this release regenerated — never `git add -A`.
 # (Anything else that belongs in the release is already committed,
 # enforced by the clean-worktree preflight.)
-git add VERSION SHA256SUMS dist/poke-darwin-universal
+git add VERSION SHA256SUMS dist/poke-darwin-universal peon-poke
 git diff --cached --quiet && die "nothing to commit for v$VERSION"
 if [ -n "$MSG" ]; then
   git commit -q -m "v$VERSION: $MSG"

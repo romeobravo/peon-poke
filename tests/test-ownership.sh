@@ -149,6 +149,61 @@ run_setup
 [ "$(readlink "$H/.local/bin/peon-poke")" = "$H/bin/elsewhere" ] \
   && ok "setup: foreign peon-poke symlink not replaced" || bad "setup: replaced foreign peon-poke symlink"
 
+# ------------------- PATH links stay in the first dir on re-runs -------
+# The first writable on-PATH dir wins — once our links exist there, a
+# re-run must not "helpfully" add them to the next candidate dir too.
+fresh
+mkdir -p "$H/.local/bin" "$H/bin"
+env HOME="$H" PATH="$H/.local/bin:$H/bin:$PATH" bash "$REPO/peon-poke-setup" >>"$TMP/setup.log" 2>&1
+env HOME="$H" PATH="$H/.local/bin:$H/bin:$PATH" bash "$REPO/peon-poke-setup" >>"$TMP/setup.log" 2>&1
+[ -L "$H/.local/bin/peon-poke" ] && [ ! -e "$H/bin/peon-poke" ] \
+   && [ ! -e "$H/bin/peon-poke-uninstall" ] \
+   && ok "setup: PATH links stay in the first candidate dir across re-runs" \
+   || bad "setup: PATH links spread to a second candidate dir"
+
+# --------------- setup re-run from the installed CLI (self-heal) -------
+# The documented healing path: `peon-poke setup` via the installed CLI
+# (or its PATH symlink) must re-register hooks in place, not demand a
+# repo checkout next to the binary.
+fresh
+mkdir -p "$H/.claude" "$H/.local/bin"
+run_setup
+id1="$(sed -n 's/^install_id=//p' "$H/.peon-poke/.peon-poke-install")"
+env HOME="$H" PATH="$H/.local/bin:$PATH" "$H/.peon-poke/bin/peon-poke" setup >>"$TMP/setup.log" 2>&1
+rc=$?
+id2="$(sed -n 's/^install_id=//p' "$H/.peon-poke/.peon-poke-install")"
+if [ "$rc" = 0 ] \
+   && [ "$(grep -c ' dispatch ' "$H/.claude/settings.json")" = 3 ] \
+   && ! grep -q "not found or not executable" "$TMP/setup.log" \
+   && [ "$id1" = "$id2" ]; then
+  ok "setup: re-run from the installed CLI heals in place"
+else
+  bad "setup: installed-CLI re-run broken (rc=$rc)"
+fi
+# version survives without a VERSION file next to the installed CLI
+v="$(sed -n 's/^version=//p' "$H/.peon-poke/.peon-poke-install")"
+case "$($H/.peon-poke/bin/peon-poke --version)" in
+  *" unknown"|"") bad "installed CLI version: '$v' / --version broken" ;;
+  *) ok "installed CLI reports its version without a VERSION file" ;;
+esac
+
+# ---------------- install dir with spaces: hook ownership round-trip ---
+# shlex.join single-quotes such paths; registration must recognize our
+# own single-quoted shape (no duplicate entries on re-run) and uninstall
+# must remove them again.
+fresh
+mkdir -p "$H/.claude" "$H/.local/bin"
+SPACED="$H/My Tools/.peon-poke"
+env HOME="$H" POKE_DIR="$SPACED" PATH="$H/.local/bin:$PATH" bash "$REPO/peon-poke-setup" >>"$TMP/setup.log" 2>&1
+env HOME="$H" POKE_DIR="$SPACED" PATH="$H/.local/bin:$PATH" bash "$REPO/peon-poke-setup" >>"$TMP/setup.log" 2>&1
+n="$(grep -c ' dispatch ' "$H/.claude/settings.json")"
+[ "$n" = 3 ] && ok "spaced POKE_DIR: re-run does not duplicate hooks" \
+  || bad "spaced POKE_DIR: $n hook commands after two setups (want 3)"
+env HOME="$H" POKE_DIR="$SPACED" bash "$REPO/uninstall.sh" >>"$TMP/uninstall.log" 2>&1
+! grep -q ' dispatch ' "$H/.claude/settings.json" \
+  && ok "spaced POKE_DIR: uninstall removes all our hooks" \
+  || bad "spaced POKE_DIR: uninstall left our hooks behind"
+
 # --------------------- user hook mentioning peon-poke: exact ownership ---
 # Registration skips only entries that are EXACTLY ours; a user's own
 # hook that merely mentions peon-poke must survive setup and uninstall.

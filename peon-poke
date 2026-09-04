@@ -37,6 +37,10 @@ import uuid
 CATEGORIES = ("session.start", "task.acknowledge", "task.complete",
               "task.error", "input.required")
 
+# Bumped by scripts/release.sh alongside the VERSION file; used when no
+# VERSION file sits next to this copy (the installed CLI).
+__version__ = "0.6.3"
+
 UUID_RE = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-'
                      r'[0-9a-f]{4}-[0-9a-f]{12}$')
 
@@ -118,11 +122,17 @@ def resolve_token(cfg, token):
     """
     if not cfg.get("enabled", True):
         return None
-    custom = cfg.get("custom") or {}
-    if token in cfg.get("categories", {}) or token in cfg.get("patterns", {}):
-        if not cfg.get("categories", {}).get(token, False):
+
+    def sect(key):  # hand-edited configs can carry wrong shapes — never crash
+        v = cfg.get(key)
+        return v if isinstance(v, dict) else {}
+
+    custom = sect("custom")
+    categories, patterns = sect("categories"), sect("patterns")
+    if token in categories or token in patterns:
+        if not categories.get(token, False):
             return None
-        pat = cfg.get("patterns", {}).get(token, "")
+        pat = patterns.get(token, "")
         pat = custom.get(pat, pat)
     else:
         pat = custom.get(token, token)
@@ -150,12 +160,15 @@ def fire(pattern, strength):
 def dispatch_token(token):
     if not token:
         return
-    cfg = load_config()
-    if cfg is None:
-        return
-    resolved = resolve_token(cfg, token)
-    if resolved:
-        fire(*resolved)
+    try:
+        cfg = load_config()
+        if cfg is None:
+            return
+        resolved = resolve_token(cfg, token)
+        if resolved:
+            fire(*resolved)
+    except Exception:
+        pass  # invariant: a broken config must never fail the host agent
 
 
 def cmd_dispatch(args):
@@ -334,8 +347,8 @@ CLAUDE_EVENTS = (("Stop", "task.complete"),
 
 def claude_hook_patterns():
     cats = "|".join(re.escape(c) for c in CATEGORIES)
-    legacy = re.compile(r'^bash (?:"[^"]*?/poke\.sh"|\S+/poke\.sh) (?:%s)$' % cats)
-    current = re.compile(r'^(?:"[^"]*?/bin/peon-poke"|\S+/bin/peon-poke)'
+    legacy = re.compile(r'^bash (?:"[^"]*?/poke\.sh"|\'[^\']*?/poke\.sh\'|\S+/poke\.sh) (?:%s)$' % cats)
+    current = re.compile(r'^(?:"[^"]*?/bin/peon-poke"|\'[^\']*?/bin/peon-poke\'|\S+/bin/peon-poke)'
                          r' dispatch (?:%s)$' % cats)
     return legacy, current
 
@@ -757,7 +770,8 @@ def install_path_links(install):
                     continue
                 current = os.readlink(link)
                 if current == target:
-                    continue  # already exactly ours
+                    acted = True  # this dir already owns the commands — stop here
+                    continue
                 if legacy and current == legacy:
                     pass  # our own <=0.6.x launcher link — refresh below
                 else:
@@ -800,16 +814,20 @@ def uninstall_path_links(install):
 
 def cmd_setup(_args):
     src = src_dir()
+    # `peon-poke setup` run as the installed CLI (…/bin/peon-poke): the
+    # payload is already laid out one level up — heal registrations in
+    # place instead of demanding a repo checkout next to the binary.
+    installed_layout = os.path.basename(src) == "bin" and all(
+        os.path.isfile(os.path.join(os.path.dirname(src), f))
+        for f in ("bin/poke", "bin/peon-poke"))
+    if installed_layout:
+        src = os.path.dirname(src)
     install = install_dir()
-    version = "unknown"
-    try:
-        with open(os.path.join(src, "VERSION")) as f:
-            version = f.read().strip()
-    except OSError:
-        pass
+    version = read_version(src)
 
-    for required in ("bin/poke", "peon-poke"):
-        p = os.path.join(src, required)
+    for rel in (("bin/poke", "bin/peon-poke") if installed_layout
+                else ("bin/poke", "peon-poke")):
+        p = os.path.join(src, rel)
         if not (os.path.isfile(p) and os.access(p, os.X_OK)):
             warn("%s not found or not executable — run install.sh or brew first" % p)
             return 1
@@ -817,9 +835,10 @@ def cmd_setup(_args):
     info("Installing to %s" % install)
     for sub in ("bin", "adapters", "plugins/pi", "plugins/opencode"):
         os.makedirs(os.path.join(install, sub), exist_ok=True)
+    cli_src = "bin/peon-poke" if installed_layout else "peon-poke"
     copies = [
         (os.path.join(src, "bin/poke"), os.path.join(install, "bin/poke")),
-        (os.path.join(src, "peon-poke"), os.path.join(install, "bin/peon-poke")),
+        (os.path.join(src, cli_src), os.path.join(install, "bin/peon-poke")),
         (os.path.join(src, "poke.sh"), os.path.join(install, "poke.sh")),
         (os.path.join(src, "plugins/pi/poke.ts"),
          os.path.join(install, "plugins/pi/poke.ts")),
@@ -837,6 +856,8 @@ def cmd_setup(_args):
                 copies.append((os.path.join(adapters_src, name),
                                os.path.join(install, "adapters", name)))
     for s, d in copies:
+        if os.path.realpath(s) == os.path.realpath(d):
+            continue  # healing from the installed payload itself — already in place
         shutil.copy2(s, d)
         if d.endswith(".sh") or os.path.basename(d) in ("poke", "peon-poke"):
             os.chmod(d, 0o755)
@@ -847,12 +868,15 @@ def cmd_setup(_args):
 
     # --- config (never overwrite an existing one) ---
     cfg = os.path.join(config_dir(), "config.json")
-    if not os.path.isfile(cfg):
+    src_cfg = os.path.join(src, "config.json")
+    if os.path.isfile(cfg):
+        info("Config already present at %s (kept)" % cfg)
+    elif os.path.isfile(src_cfg):
         os.makedirs(config_dir(), exist_ok=True)
-        shutil.copy2(os.path.join(src, "config.json"), cfg)
+        shutil.copy2(src_cfg, cfg)
         info("Config written to %s" % cfg)
     else:
-        info("Config already present at %s (kept)" % cfg)
+        warn("No default config at %s — config not written" % src_cfg)
 
     # --- Claude Code hooks ---
     if os.path.isdir(os.path.expanduser("~/.claude")):
@@ -1070,12 +1094,12 @@ def cmd_doctor(_args):
 
 # ----------------------------------------------------------------- main ---
 
-def read_version():
+def read_version(src=None):
     try:
-        with open(os.path.join(os.path.dirname(self_path()), "VERSION")) as f:
+        with open(os.path.join(src or os.path.dirname(self_path()), "VERSION")) as f:
             return f.read().strip()
     except OSError:
-        return "unknown"
+        return __version__
 
 
 def build_parser():

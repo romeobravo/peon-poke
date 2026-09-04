@@ -1,9 +1,12 @@
 #!/bin/bash
-# test-dispatch.sh — poke.sh pattern dispatch (issue: word splitting).
+# test-dispatch.sh — pattern dispatch through the Python CLI (poke.sh
+# execs `peon-poke dispatch`; malformed-config cases exercise the CLI
+# directly, which is the shape hooks invoke).
 # Config patterns are single spec strings ("[60, 120, 40]", "boop"); the
 # dispatcher must pass them as ONE argument. Unquoted expansion used to
 # split spaced lists (bin/poke reads argv[1] only -> truncated pattern)
-# and glob-expand stray "*".
+# and glob-expand stray "*". Dispatch must ALWAYS exit 0, even on a
+# hand-mangled config.
 set -u
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/.." && pwd)"
@@ -86,6 +89,31 @@ dispatch task.complete 0
 cfg '{"enabled":false,"categories":{"task.complete":true},"patterns":{"task.complete":"boop"}}'
 dispatch task.complete 0
 [ ! -s "$TMP/log" ] && ok "enabled:false silences everything" || bad "fired while disabled"
+
+# --- malformed config shapes: never crash, always exit 0 ----------------
+# Wrong shapes (list/string where an object belongs) used to raise
+# AttributeError and exit 1 — failing the host agent's hook on every turn.
+for bad in \
+  '{"categories":["task.complete"],"patterns":{"task.complete":"boop"}}' \
+  '{"categories":{"task.complete":true},"patterns":["task.complete"]}' \
+  '{"custom":"boop"}' \
+  '["not","an","object"]' ; do
+  cfg "$bad"
+  ( cd "$TMP/cwd" && env HOME="$H" POKE_BIN="$TMP/stub-poke" \
+      python3 "$REPO/peon-poke" dispatch task.complete ) >"$TMP/bad.out" 2>&1
+  rc=$?
+  if [ "$rc" = 0 ] && ! grep -q "Traceback" "$TMP/bad.out"; then
+    ok "malformed config shape exits 0 quietly: $bad"
+  else
+    bad "malformed config crashed (rc=$rc): $bad"
+  fi
+done
+# a gated category under a broken patterns section stays silent
+cfg '{"categories":{"task.complete":true},"patterns":["task.complete"]}'
+dispatch task.complete 0
+sleep 0.2
+[ ! -s "$TMP/log" ] && ok "gated category silent under malformed patterns" \
+  || bad "fired on malformed patterns"
 
 echo "----"
 echo "dispatch: $PASS passed, $FAIL failed"
