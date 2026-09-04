@@ -40,7 +40,7 @@ CATEGORIES = ("session.start", "task.acknowledge", "task.complete",
 
 # Bumped by scripts/release.sh alongside the VERSION file; used when no
 # VERSION file sits next to this copy (the installed CLI).
-__version__ = "0.6.3"
+__version__ = "0.7.0"
 
 UUID_RE = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-'
                      r'[0-9a-f]{4}-[0-9a-f]{12}$')
